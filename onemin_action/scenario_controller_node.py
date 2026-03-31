@@ -16,7 +16,7 @@ from std_msgs.msg import Int32, String
 from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
 
-from vertical_action.line_pose_loader import get_data_dir, load_line_pose
+from onemin_action.line_pose_loader import get_data_dir, load_line_pose
 
 
 class State(enum.Enum):

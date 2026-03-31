@@ -4,7 +4,7 @@
 현재 위치·방향을 패키지 내 data/line_positions.yaml 에 1번부터 저장.
 저장 형식: RViz2 Nav2 Goal과 동일 (geometry_msgs/PoseStamped).
 
-실행: ros2 run vertical_action record_line_positions_node
+실행: ros2 run onemin_action record_line_positions_node
   k : 현재 위치 저장 (1번부터 자동 증가)
   s 또는 Ctrl+C : 종료
 """
@@ -27,13 +27,13 @@ import yaml
 def _get_package_data_dir() -> str:
     """소스 패키지의 data 디렉터리 (colcon 시 workspace/src/<패키지명>/data)."""
     path = os.path.abspath(__file__)
-    # .../workspace/build/vertical_action/vertical_action/record_... or .../install/.../vertical_action/record_...
+    # .../workspace/build/onemin_action/onemin_action/record_... or .../install/.../onemin_action/record_...
     pkg_dir = os.path.dirname(os.path.dirname(path))
     parent = os.path.dirname(pkg_dir)
     if os.path.basename(parent) in ("build", "install"):
         workspace = os.path.dirname(parent)
-        src_data = os.path.join(workspace, "src", "vertical_action", "data")
-        if os.path.isdir(os.path.join(workspace, "src", "vertical_action")):
+        src_data = os.path.join(workspace, "src", "onemin_action", "data")
+        if os.path.isdir(os.path.join(workspace, "src", "onemin_action")):
             return src_data
     return os.path.join(pkg_dir, "data")
 
@@ -111,7 +111,7 @@ class RecordLinePositionsNode(Node):
             hint = (
                 "저장: 다른 터미널에서 아래 한 줄 실행 (k 입력 불가, launch는 stdin 미연결)\n"
                 "  ros2 topic pub --once /record_line_position std_msgs/Empty '{}'\n"
-                "  또는 k/s 쓰려면: ros2 run vertical_action record_line_positions_node"
+                "  또는 k/s 쓰려면: ros2 run onemin_action record_line_positions_node"
             )
         self.get_logger().info(hint)
         print(hint, flush=True)

@@ -1,7 +1,7 @@
 from setuptools import find_packages, setup
 from glob import glob
 
-package_name = "vertical_action"
+package_name = "onemin_action"
 
 setup(
     name=package_name,
@@ -22,9 +22,9 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "record_line_positions_node = vertical_action.record_line_positions_node:main",
-            "manual_action_command_node = vertical_action.manual_action_command_node:main",
-            "scenario_controller_node = vertical_action.scenario_controller_node:main",
+            "record_line_positions_node = onemin_action.record_line_positions_node:main",
+            "manual_action_command_node = onemin_action.manual_action_command_node:main",
+            "scenario_controller_node = onemin_action.scenario_controller_node:main",
         ],
     },
 )

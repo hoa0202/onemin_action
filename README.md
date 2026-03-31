@@ -1,4 +1,4 @@
-# vertical_action
+# onemin_action
 
 라인 입구 출발 위치 기록 및 시나리오 제어용 ROS2 패키지.
 
@@ -10,7 +10,7 @@
 ### 실행
 
 ```bash
-ros2 run vertical_action record_line_positions_node
+ros2 run onemin_action record_line_positions_node
 ```
 
 - **k** : 현재 pose를 다음 번호(1, 2, 3, …)로 저장
@@ -18,7 +18,7 @@ ros2 run vertical_action record_line_positions_node
 
 ### 저장 위치
 
-- `data/line_positions.yaml` (이 저장소·패키지 루트 기준; colcon 워크스페이스에 둘 때는 `src/vertical_action/data/line_positions.yaml`)
+- `data/line_positions.yaml` (이 저장소·패키지 루트 기준; colcon 워크스페이스에 둘 때는 `src/onemin_action/data/line_positions.yaml`)
 
 ### 파라미터
 
@@ -54,7 +54,7 @@ line_2:
 **대화형** (터미널에서 키 입력):
 
 ```bash
-ros2 run vertical_action manual_action_command_node
+ros2 run onemin_action manual_action_command_node
 ```
 
 - **1~9** : `/line_to_enter`에 해당 라인 번호 발행 (코드2 시나리오에 진입 라인 요청)
@@ -68,12 +68,12 @@ ros2 run vertical_action manual_action_command_node
 **한 번만 전송 후 종료**:
 
 ```bash
-ros2 run vertical_action manual_action_command_node 1              # 라인 1 진입 요청
-ros2 run vertical_action manual_action_command_node entering_next
-ros2 run vertical_action manual_action_command_node entering_end
-ros2 run vertical_action manual_action_command_node entering_check
-ros2 run vertical_action manual_action_command_node goal_finish
-ros2 run vertical_action manual_action_command_node goal_return_finish
+ros2 run onemin_action manual_action_command_node 1              # 라인 1 진입 요청
+ros2 run onemin_action manual_action_command_node entering_next
+ros2 run onemin_action manual_action_command_node entering_end
+ros2 run onemin_action manual_action_command_node entering_check
+ros2 run onemin_action manual_action_command_node goal_finish
+ros2 run onemin_action manual_action_command_node goal_return_finish
 ```
 
 ### 토픽
@@ -91,7 +91,7 @@ ros2 run vertical_action manual_action_command_node goal_return_finish
 ### 실행
 
 ```bash
-ros2 launch vertical_action scenario_control.launch.py
+ros2 launch onemin_action scenario_control.launch.py
 ```
 
 라인 입력은 **다른 터미널**에서 토픽으로 전송:
@@ -125,7 +125,7 @@ ros2 topic pub --once /line_to_enter std_msgs/Int32 "{data: 1}"
 ## 빌드
 
 ```bash
-cd /path/to/vertical_action
-colcon build --packages-select vertical_action
+cd /path/to/onemin_action
+colcon build --packages-select onemin_action
 source install/setup.bash
 ```

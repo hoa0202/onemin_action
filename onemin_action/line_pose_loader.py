@@ -17,8 +17,8 @@ def get_data_dir() -> str:
     parent = os.path.dirname(pkg_dir)
     if os.path.basename(parent) in ("build", "install"):
         workspace = os.path.dirname(parent)
-        src_data = os.path.join(workspace, "src", "vertical_action", "data")
-        if os.path.isdir(os.path.join(workspace, "src", "vertical_action")):
+        src_data = os.path.join(workspace, "src", "onemin_action", "data")
+        if os.path.isdir(os.path.join(workspace, "src", "onemin_action")):
             return src_data
     return os.path.join(pkg_dir, "data")
 

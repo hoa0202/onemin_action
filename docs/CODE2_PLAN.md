@@ -112,10 +112,10 @@
 ## 5. 파일 구성 (목표)
 
 ```
-vertical_action/   # 저장소(패키지) 루트
+onemin_action/   # 저장소(패키지) 루트
 ├── launch/
 │   └── scenario_control.launch.py   # 코드2 런치 (단계 5에서 추가)
-├── vertical_action/
+├── onemin_action/
 │   ├── scenario_controller_node.py # 코드2 메인 노드 (단계 3)
 │   └── (필요 시) nav2_goal_client.py 또는 yaml_pose_loader.py
 ├── data/

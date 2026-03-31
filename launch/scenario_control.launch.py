@@ -22,7 +22,7 @@ def generate_launch_description():
             description="entering_check 미수신 시 entering_start 최대 재전송 횟수",
         ),
         Node(
-            package="vertical_action",
+            package="onemin_action",
             executable="scenario_controller_node",
             name="scenario_controller_node",
             output="screen",

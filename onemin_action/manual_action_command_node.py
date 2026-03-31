@@ -5,13 +5,13 @@
   /action_check: entering_check, goal_finish, goal_return_finish
 
 실행:
-  ros2 run vertical_action manual_action_command_node                    # 대화형
-  ros2 run vertical_action manual_action_command_node entering_next      # 한 번만 전송
-  ros2 run vertical_action manual_action_command_node entering_end
-  ros2 run vertical_action manual_action_command_node entering_check
-  ros2 run vertical_action manual_action_command_node goal_finish
-  ros2 run vertical_action manual_action_command_node goal_return_finish
-  ros2 run vertical_action manual_action_command_node 1   # 라인 1 진입 요청 (/line_to_enter)
+  ros2 run onemin_action manual_action_command_node                    # 대화형
+  ros2 run onemin_action manual_action_command_node entering_next      # 한 번만 전송
+  ros2 run onemin_action manual_action_command_node entering_end
+  ros2 run onemin_action manual_action_command_node entering_check
+  ros2 run onemin_action manual_action_command_node goal_finish
+  ros2 run onemin_action manual_action_command_node goal_return_finish
+  ros2 run onemin_action manual_action_command_node 1   # 라인 1 진입 요청 (/line_to_enter)
 """
 import select
 import sys
