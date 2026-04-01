@@ -11,7 +11,14 @@
   ros2 run onemin_action manual_action_command_node entering_check
   ros2 run onemin_action manual_action_command_node goal_finish
   ros2 run onemin_action manual_action_command_node goal_return_finish
-  ros2 run onemin_action manual_action_command_node 1   # 라인 1 진입 요청 (/line_to_enter)
+  ros2 run onemin_action manual_action_command_node 1   # std_msgs/String → line_move_topic (기본 /harv_robot/line_move)
+  ros2 run onemin_action manual_action_command_node 11  # line_number_max 이하 숫자 문자열
+  ros2 run onemin_action manual_action_command_node warehouse
+  ros2 run onemin_action manual_action_command_node move_to_docking_station
+  ros2 run onemin_action manual_action_command_node move_to_return
+
+파라미터 예:
+  --ros-args -p line_move_topic:=/harv_robot/line_move -p line_number_max:=12 -p docking_topic:=/harv_robot/docking_move
 """
 import select
 import sys
@@ -21,22 +28,41 @@ import tty
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String, Int32
+from std_msgs.msg import String
+
+
+DOCK_CMDS = frozenset({"move_to_docking_station", "move_to_return"})
 
 
 class ManualActionCommandNode(Node):
     def __init__(self):
         super().__init__("manual_action_command_node")
+        self.declare_parameter("docking_topic", "/harv_robot/docking_move")
+        self._docking_topic = str(self.get_parameter("docking_topic").value or "")
+
         self._pub_action = self.create_publisher(String, "/action", 10)
         self._pub_action_check = self.create_publisher(String, "/action_check", 10)
-        self._pub_line = self.create_publisher(Int32, "/line_to_enter", 10)
+        self.declare_parameter("line_move_topic", "/harv_robot/line_move")
+        _line_topic = str(self.get_parameter("line_move_topic").value or "").strip()
+        self._pub_line = self.create_publisher(String, _line_topic or "/harv_robot/line_move", 10)
+        self.declare_parameter("line_number_max", 10)
+        try:
+            self._line_number_max = int(self.get_parameter("line_number_max").value)
+        except (TypeError, ValueError):
+            self._line_number_max = 10
+        if self._line_number_max < 1:
+            self._line_number_max = 10
+        if self._docking_topic:
+            self._pub_docking = self.create_publisher(String, self._docking_topic, 10)
+        else:
+            self._pub_docking = None
 
-    def send_line(self, line_number: int) -> None:
-        msg = Int32()
-        msg.data = line_number
+    def send_line_move(self, data: str) -> None:
+        msg = String()
+        msg.data = data.strip()
         self._pub_line.publish(msg)
-        self.get_logger().info(f"/line_to_enter 발행: {line_number}")
-        print(f"/line_to_enter 발행: 라인 {line_number}", flush=True)
+        self.get_logger().info(f"line_move 발행: {msg.data!r}")
+        print(f"line_move 발행: {msg.data!r}", flush=True)
 
     def send(self, data: str) -> None:
         msg = String()
@@ -51,6 +77,16 @@ class ManualActionCommandNode(Node):
         self._pub_action_check.publish(msg)
         self.get_logger().info(f"/action_check 발행: '{data}'")
         print(f"/action_check 발행: '{data}'", flush=True)
+
+    def send_docking(self, data: str) -> None:
+        if not self._pub_docking:
+            self.get_logger().warn("docking_topic 비어 있음")
+            return
+        msg = String()
+        msg.data = data
+        self._pub_docking.publish(msg)
+        self.get_logger().info(f"{self._docking_topic} 발행: '{data}'")
+        print(f"{self._docking_topic} 발행: '{data}'", flush=True)
 
 
 def _stdin_ready():
@@ -76,18 +112,38 @@ def main(args=None):
             node.send(cmd)
         elif cmd in ("entering_check", "goal_finish", "goal_return_finish"):
             node.send_check(cmd)
-        elif cmd.isdigit() and int(cmd) >= 1:
-            node.send_line(int(cmd))
+        elif cmd.lower() == "warehouse":
+            node.send_line_move("warehouse")
+        elif cmd.isdigit():
+            n = int(cmd, 10)
+            if 1 <= n <= node._line_number_max:
+                node.send_line_move(cmd)
+            else:
+                print(
+                    f"라인 번호 1~{node._line_number_max} 만 허용: {cmd}",
+                    file=sys.stderr,
+                )
+        elif cmd in DOCK_CMDS:
+            node.send_docking(cmd)
         else:
-            print(f"알 수 없는 명령: {cmd} (entering_next | entering_end | entering_check | goal_finish | goal_return_finish | 1~9 라인번호)", file=sys.stderr)
+            print(
+                f"알 수 없는 명령: {cmd} (entering_* | goal_* | 1~{node._line_number_max} | warehouse | move_to_* )",
+                file=sys.stderr,
+            )
         node.destroy_node()
         rclpy.shutdown()
         return
 
-    # 대화형: 1~9 = /line_to_enter, n/e = /action, c/f/r = /action_check, q = 종료
+    # 대화형: TTY 1~9·0(=10, line_number_max>=10일 때) = line_move; w=warehouse; 10 초과는 파이프/줄 입력으로 숫자
     spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
     spin_thread.start()
-    print("1~9: 라인 진입 요청(/line_to_enter) | n: entering_next | e: entering_end | c: entering_check | f: goal_finish | r: goal_return_finish | q: 종료", flush=True)
+    _mx = node._line_number_max
+    _zero_hint = ", 0→10" if _mx >= 10 else ""
+    print(
+        f"라인 1~{_mx} (TTY: 1~9{_zero_hint}; 10+는 줄 입력 '10' 등) | w: warehouse | "
+        "n/e/c/f/r | d/b 도킹 | q 종료",
+        flush=True,
+    )
 
     if sys.stdin.isatty():
         old_attr = termios.tcgetattr(sys.stdin)
@@ -98,7 +154,18 @@ def main(args=None):
                 if key is None:
                     continue
                 if key in "123456789":
-                    node.send_line(int(key))
+                    n = int(key)
+                    if n <= node._line_number_max:
+                        node.send_line_move(key)
+                    else:
+                        print(f"라인 상한 {node._line_number_max}", flush=True)
+                elif key == "0":
+                    if node._line_number_max >= 10:
+                        node.send_line_move("10")
+                    else:
+                        print(f"0 키(라인 10) 비활성: line_number_max={node._line_number_max}", flush=True)
+                elif key == "w":
+                    node.send_line_move("warehouse")
                 elif key == "n":
                     node.send("entering_next")
                 elif key == "e":
@@ -109,6 +176,10 @@ def main(args=None):
                     node.send_check("goal_finish")
                 elif key == "r":
                     node.send_check("goal_return_finish")
+                elif key == "d":
+                    node.send_docking("move_to_docking_station")
+                elif key == "b":
+                    node.send_docking("move_to_return")
                 elif key == "q" or key == "\x03":
                     break
         except KeyboardInterrupt:
@@ -118,20 +189,31 @@ def main(args=None):
     else:
         try:
             while True:
-                line = input().strip().lower()
-                if line.isdigit() and int(line) >= 1:
-                    node.send_line(int(line))
-                elif line in ("n", "entering_next"):
+                line = input().strip()
+                low = line.lower()
+                if low == "warehouse":
+                    node.send_line_move("warehouse")
+                elif line.isdigit():
+                    n = int(line, 10)
+                    if 1 <= n <= node._line_number_max:
+                        node.send_line_move(line)
+                    else:
+                        print(f"라인 1~{node._line_number_max} 만 허용.", flush=True)
+                elif low in ("n", "entering_next"):
                     node.send("entering_next")
-                elif line in ("e", "entering_end"):
+                elif low in ("e", "entering_end"):
                     node.send("entering_end")
-                elif line in ("c", "entering_check"):
+                elif low in ("c", "entering_check"):
                     node.send_check("entering_check")
-                elif line in ("f", "goal_finish"):
+                elif low in ("f", "goal_finish"):
                     node.send_check("goal_finish")
-                elif line in ("r", "goal_return_finish"):
+                elif low in ("r", "goal_return_finish"):
                     node.send_check("goal_return_finish")
-                elif line in ("q", "quit"):
+                elif low in ("d", "move_to_docking_station", "dock"):
+                    node.send_docking("move_to_docking_station")
+                elif low in ("b", "move_to_return", "return"):
+                    node.send_docking("move_to_return")
+                elif low in ("q", "quit"):
                     break
         except (EOFError, KeyboardInterrupt):
             pass

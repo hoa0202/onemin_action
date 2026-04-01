@@ -1,6 +1,8 @@
 # 제외
 .specstory/
 **/data/line_positions.yaml
+**/data/waypoint_graph.yaml
+**/data/docking_positions.yaml
 
 # colcon
 build/

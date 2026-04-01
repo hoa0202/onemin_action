@@ -10,7 +10,14 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
-        ("share/" + package_name + "/config", ["config/line_positions.yaml"]),
+        (
+            "share/" + package_name + "/config",
+            [
+                "config/line_positions.yaml",
+                "config/waypoint_graph.example.yaml",
+                "config/docking_positions.example.yaml",
+            ],
+        ),
         ("share/" + package_name + "/launch", glob("launch/*.launch.py")),
     ],
     install_requires=["setuptools", "pyyaml"],
@@ -25,6 +32,9 @@ setup(
             "record_line_positions_node = onemin_action.record_line_positions_node:main",
             "manual_action_command_node = onemin_action.manual_action_command_node:main",
             "scenario_controller_node = onemin_action.scenario_controller_node:main",
+            "record_graph_waypoints_node = onemin_action.record_graph_waypoints_node:main",
+            "record_docking_positions_node = onemin_action.record_docking_positions_node:main",
+            "rebuild_waypoint_graph_edges = onemin_action.rebuild_waypoint_graph_edges_node:main",
         ],
     },
 )

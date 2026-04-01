@@ -1,0 +1,26 @@
+# 복사: cp config/waypoint_graph.example.yaml src/onemin_action/data/waypoint_graph.yaml
+#
+# 노드만 record_graph_waypoints_node 로 찍은 뒤:
+#   edge_build_mode:=chain_bidirectional 로 저장하거나
+#   ros2 run onemin_action rebuild_waypoint_graph_edges
+# → Dijkstra_example setup_graph 과 같이 wp_1–wp_2–… 순 양방향 체인 + 아래 추가쌍
+
+nodes: {}
+edges: []
+
+graph_build:
+  node_id_prefix: wp
+  extra_bidirectional_pairs: []
+  #  - [wp_1, wp_4]
+  excluded_node_ids: []
+
+# 라인 N: line_positions 의 line_N 까지 마지막 연결 허용 노드
+# line_goal_links:
+#   1: [wp_3]
+
+# 도킹: move_to_docking_station 만 보통 필요. 링크 노드는 docking_positions 좌표와 가장 가까운 WP
+#   (무작정 wp_1 이면 wp_1–dock 직선이 체인 방향과 꺾여 경로/플래너만 괴상해질 수 있음)
+# 폴백만: line_before_dock 없을 때 move_to_return pose + 아래 링크
+# docking_goal_links:
+#   move_to_docking_station: [wp_2]
+#   # move_to_return: [wp_1]

@@ -54,3 +54,40 @@ def load_line_pose(data_dir: str, line_number: int, stamp: Optional[Time] = None
     pose.pose.orientation.z = float(ori.get("z", 0))
     pose.pose.orientation.w = float(ori.get("w", 1))
     return pose
+
+
+def load_pose_by_key(
+    data_dir: str,
+    yaml_basename: str,
+    key: str,
+    stamp: Optional[Time] = None,
+) -> Optional[PoseStamped]:
+    """
+    data/<yaml_basename> 에서 최상위 키 key의 pose 엔트리 로드 (line_N 과 동일 스키마).
+    도킹: docking_positions.yaml + 키 move_to_docking_station, move_to_return 등.
+    """
+    if not key:
+        return None
+    path = os.path.join(data_dir, yaml_basename)
+    if not os.path.isfile(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    if key not in data:
+        return None
+    entry = data[key]
+    frame_id = entry.get("frame_id", "map")
+    pos = entry.get("position", {})
+    ori = entry.get("orientation", {})
+    pose = PoseStamped()
+    pose.header.frame_id = frame_id
+    if stamp:
+        pose.header.stamp = stamp
+    pose.pose.position.x = float(pos.get("x", 0))
+    pose.pose.position.y = float(pos.get("y", 0))
+    pose.pose.position.z = float(pos.get("z", 0))
+    pose.pose.orientation.x = float(ori.get("x", 0))
+    pose.pose.orientation.y = float(ori.get("y", 0))
+    pose.pose.orientation.z = float(ori.get("z", 0))
+    pose.pose.orientation.w = float(ori.get("w", 1))
+    return pose

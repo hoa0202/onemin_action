@@ -1,0 +1,20 @@
+# data/docking_positions 으로 복사 후, 도킹 위치만 기록하면 됨.
+#
+#   ros2 run onemin_action record_docking_positions_node \\
+#     --ros-args -p save_key:=move_to_docking_station
+#   → 도킹 자리에서 k
+#
+# move_to_return 은 기본적으로 “이전에 저장된 라인”으로 그래프 복귀함.
+#   → 이 파일에 move_to_return 을 찍을 필요 없음 (수동 웨이포인트 아님).
+#   → line_before_dock 이 없을 때만 폴백으로 docking_goal_links + 아래 키가 필요 (거의 안 씀).
+
+move_to_docking_station:
+  frame_id: map
+  position: { x: 0.0, y: 0.0, z: 0.0 }
+  orientation: { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }
+
+# (선택) 폴백 전용 — 대부분 비워도 됨
+# move_to_return:
+#   frame_id: map
+#   position: { x: 0.0, y: 0.0, z: 0.0 }
+#   orientation: { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }
