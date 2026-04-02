@@ -94,6 +94,73 @@ line_goal_links:
   warehouse:
     - wp_2
     - wp_1
+
+nodes:
+  wp_1:
+    frame_id: odom_1
+    position:
+      x: -0.419542
+      y: 0.791885
+      z: -0.0
+    orientation:
+      x: 0.009223
+      y: -0.006151
+      z: -0.673592
+      w: 0.73902
+  wp_2:
+    frame_id: odom_1
+    position:
+      x: 1.359436
+      y: -0.763599
+      z: 0.0
+    orientation:
+      x: 0.001589
+      y: -0.001395
+      z: 0.037266
+      w: 0.999303
+  wp_3:
+    frame_id: odom_1
+    position:
+      x: 1.182973
+      y: -1.267989
+      z: 0.0
+    orientation:
+      x: -0.001835
+      y: 6.0e-05
+      z: 0.023795
+      w: -0.999715
+edges:
+- from: wp_1
+  to: wp_2
+  cost: 2.363111
+- from: wp_2
+  to: wp_1
+  cost: 2.363111
+- from: wp_2
+  to: wp_3
+  cost: 0.534367
+- from: wp_3
+  to: wp_2
+  cost: 0.534367
+line_goal_links:
+  1:
+  - wp_5
+  - wp_6
+  2:
+  - wp_6
+  - wp_7
+  3:
+  - wp_7
+  # wp_1만 두면 wp_2→wp_1 Nav2 구간이 costmap에서 막혀 "no valid path" 날 수 있음 → wp_2에서 (0,0) 직결 옵션 추가
+  warehouse:
+  - wp_2
+  - wp_1
+graph_build: {}
+docking_goal_links:
+  # docking_positions 가 (2.75,-2) 부근이면 체인상 wp_4(2.66,-1.03) 가 wp_1 보다 가깝다
+  move_to_docking_station:
+  - wp_4
+
 ```
 
 ---
