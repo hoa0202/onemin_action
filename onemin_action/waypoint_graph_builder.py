@@ -105,6 +105,47 @@ def _get_graph_build_section(doc: Dict[str, Any]) -> Dict[str, Any]:
     return gb if isinstance(gb, dict) else {}
 
 
+def autofill_empty_docking_goal_links(
+    doc: Dict[str, Any],
+    *,
+    prefix: str = "wp",
+    docking_keys: Sequence[str] = ("move_to_docking_station", "move_to_return"),
+) -> List[str]:
+    """
+    docking_goal_links 항목이 비어 있으면 체인의 마지막 wp_* 를 넣음(예시·동작 가능 여부는 맵에 따라 튜닝 필요).
+    """
+    nodes = doc.get("nodes") or {}
+    msgs: List[str] = []
+    if not nodes:
+        return msgs
+    keys = sorted_waypoint_keys(list(nodes.keys()), prefix)
+    if not keys:
+        return msgs
+    last = keys[-1]
+    dgl = doc.get("docking_goal_links")
+    raw: Dict[str, Any] = dict(dgl) if isinstance(dgl, dict) else {}
+    for k in docking_keys:
+        gk = str(k)
+        v = raw.get(gk)
+        empty = v is None or v == [] or (isinstance(v, list) and len(v) == 0)
+        if empty:
+            raw[gk] = [last]
+            msgs.append(
+                f"docking_goal_links[{gk!r}] 비어 있음 → 예시 [{last}] "
+                "(실제 도킹·복귀 진입 wp 로 꼭 수정)"
+            )
+    doc["docking_goal_links"] = raw
+    return msgs
+
+
+def ensure_graph_yaml_aux_sections(out: Dict[str, Any]) -> None:
+    """line_goal_links / docking_goal_links / graph_build 가 dict 이면 유지, 아니면 {}."""
+    for key in ("line_goal_links", "docking_goal_links", "graph_build"):
+        v = out.get(key)
+        if not isinstance(v, dict):
+            out[key] = {}
+
+
 def apply_graph_build(
     doc: Dict[str, Any],
     *,
@@ -141,8 +182,25 @@ def apply_graph_build(
 
     out["nodes"] = nodes
     out["edges"] = edges
-    if "graph_build" not in out:
-        out["graph_build"] = {}
-    elif not isinstance(out["graph_build"], dict):
-        out["graph_build"] = {}
+    ensure_graph_yaml_aux_sections(out)
     return out
+
+
+# rebuild_waypoint_graph_edges 가 YAML 끝에 한 번만 붙이는 주석 (파서 무시)
+GRAPH_LINK_FIELD_GUIDE_MARKER = "# [onemin_action] graph 링크 필드 안내 (자동)"
+
+GRAPH_LINK_FIELD_GUIDE = """
+# -----------------------------------------------------------------------------
+# line_goal_links
+#   → line_positions.yaml 키와 매칭: "1","2",…,"warehouse" 만. [ wp_a, wp_b, … ]
+# docking_goal_links
+#   → 도킹 Nav 연결 (토픽 문자열과 동일). move_to_docking_station / move_to_return
+#   ⚠ move_to_* 는 line_goal_links 가 아니라 반드시 여기.
+# 예:
+# line_goal_links:
+#   warehouse: [wp_2, wp_1]
+# docking_goal_links:
+#   move_to_docking_station: [wp_3]
+#   move_to_return: [wp_2]
+# -----------------------------------------------------------------------------
+"""

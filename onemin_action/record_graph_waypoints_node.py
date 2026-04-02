@@ -134,7 +134,13 @@ class RecordGraphWaypointsNode(Node):
 
     def _load_doc(self) -> dict:
         if not os.path.isfile(self._output_path):
-            return {"nodes": {}, "edges": [], "line_goal_links": {}}
+            return {
+                "nodes": {},
+                "edges": [],
+                "line_goal_links": {},
+                "docking_goal_links": {},
+                "graph_build": {},
+            }
         with open(self._output_path, "r", encoding="utf-8") as f:
             doc = yaml.safe_load(f) or {}
         if "nodes" not in doc:
@@ -145,6 +151,8 @@ class RecordGraphWaypointsNode(Node):
             doc["line_goal_links"] = {}
         if "graph_build" not in doc:
             doc["graph_build"] = {}
+        if "docking_goal_links" not in doc:
+            doc["docking_goal_links"] = {}
         return doc
 
     def _cb_pose_odom(self, msg: Odometry) -> None:
