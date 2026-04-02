@@ -85,7 +85,7 @@ warehouse:
 - 한 노드만 두면 Nav2 global costmap 상 그 구간이 막혀 `"no valid path"` 가 날 수 있다. **같은 창고 목표에 대해 여러 wp 를 나열**하면 (예: `wp_2`, `wp_1`) 다익스트라가 비용이 작은 쪽으로 골라, 비어 있는 통로 쪽에서만 마지막까지 가게 할 수 있다.
 - `line_goal_links` 의 키는 문자열로 통일된다 (`1`, `2`, `warehouse` 등).
 
-예 (`config/waypoint_graph.example.yaml` 참고):
+예 (`config/waypoint_graph.example.yaml` 하단 레퍼런스 주석 포함 — `data/` 는 종종 gitignore):
 
 ```yaml
 line_goal_links:
@@ -94,6 +94,17 @@ line_goal_links:
   warehouse:
     - wp_2
     - wp_1
+```
+
+**`graph_build`** (선택): `rebuild_waypoint_graph_edges` / 그래프 기록 노드가 `edges` 를 다시 만들 때 쓴다. `edges` 를 수동 유지하면 `{}` 로 둬도 된다.
+
+```yaml
+graph_build:
+  node_id_prefix: wp
+  extra_bidirectional_pairs:
+    - [wp_1, wp_4]
+  excluded_node_ids: []
+  # chain_node_order: [wp_1, wp_2, wp_3]
 ```
 
 ---
@@ -210,7 +221,7 @@ Nav2 `nav_goal_output_frame` 을 map 으로 맞춰야 할 환경이면 launch �
 - `data/line_positions.yaml` — 라인 목표 (`line_N`), (선택) `warehouse`
 - `data/waypoint_graph.yaml` — 노드·간선·`line_goal_links` 등 (그래프 모드)
 
-저장소 `.gitignore` 에는 운영용 `data/line_positions.yaml` · `waypoint_graph.yaml` 이 제외될 수 있음 — 팀원은 `config/*.example.yaml` 을 참고해 로컬 `data/` 에 복사해 사용한다.
+저장소 `.gitignore` 에는 운영용 `data/line_positions.yaml` · `waypoint_graph.yaml` 이 제외될 수 있음 — 팀원은 `config/*.example.yaml` 을 참고해 로컬 `data/` 에 복사해 사용한다. **`line_goal_links` / `graph_build` 필드 채움 예시는 `config/waypoint_graph.example.yaml` 맨 아래 주석 블록**을 보면 된다.
 
 ---
 

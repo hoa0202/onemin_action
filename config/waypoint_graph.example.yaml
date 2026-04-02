@@ -26,3 +26,34 @@ graph_build:
 # docking_goal_links:
 #   move_to_docking_station: [wp_2]
 #   # move_to_return: [wp_1]
+
+# =============================================================================
+# 레퍼런스: line_goal_links / graph_build 가 비어 있을 때 채우는 법
+# -----------------------------------------------------------------------------
+# line_goal_links (그래프 모드 필수에 가깝게)
+#   - 키: line_positions.yaml 의 엔트리 이름과 맞춤 — line_1 → YAML 키 "1",
+#     warehouse 항목이 있으면 키 "warehouse" (플래너가 문자열로 통일함)
+#   - 값: [wp_a, wp_b, …] — 그 라인/창고 pose 로 jump 하기 직전 “도착할” 웨이포인트.
+#     여 후보를 여러 개 두면 비용·역행 검사 통과하는 경로만 살아남음.
+#
+# graph_build (edges 를 자동 재생성할 때만 의미 있음; edges 수동 편집이면 {} 가능)
+#   node_id_prefix: 체인 정렬 시 접두사 (기본 wp)
+#   extra_bidirectional_pairs: 체인 외 추가 양방향 간선 [[wp_1, wp_3], …]
+#   excluded_node_ids: 재생성 전 그래프에서 제거할 노드 id
+#   chain_node_order: 비우면 wp_번호 순; 지정하면 이 순서로만 체인
+#
+# 아래는 “살아 있는 예” 스켈레톤 — 복사 후 노드 이름을 본인 wp_* 로 바꿀 것.
+#
+# line_goal_links:
+#   "1": [wp_3]
+#   "2": [wp_3, wp_2]
+#   warehouse: [wp_1, wp_2]
+#
+# graph_build:
+#   node_id_prefix: wp
+#   extra_bidirectional_pairs: []
+#   # extra_bidirectional_pairs:
+#   #   - [wp_1, wp_3]
+#   excluded_node_ids: []
+#   # chain_node_order: [wp_1, wp_2, wp_3]
+# =============================================================================
