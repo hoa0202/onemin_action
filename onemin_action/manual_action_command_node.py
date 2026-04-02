@@ -17,8 +17,10 @@
   ros2 run onemin_action manual_action_command_node move_to_docking_station
   ros2 run onemin_action manual_action_command_node move_to_return
 
-파라미터 예:
-  --ros-args -p line_move_topic:=/harv_robot/line_move -p line_number_max:=12 -p docking_topic:=/harv_robot/docking_move
+파라미터 예 (운반 기본: line 비활성, /carry_robot/docking_move):
+  --ros-args -p line_move_topic:= -p docking_topic:=/carry_robot/docking_move
+수확:
+  --ros-args -p line_move_topic:=/harv_robot/line_move -p docking_topic:=/harv_robot/docking_move
 """
 import select
 import sys
@@ -37,14 +39,16 @@ DOCK_CMDS = frozenset({"move_to_docking_station", "move_to_return"})
 class ManualActionCommandNode(Node):
     def __init__(self):
         super().__init__("manual_action_command_node")
-        self.declare_parameter("docking_topic", "/harv_robot/docking_move")
+        self.declare_parameter("docking_topic", "/carry_robot/docking_move")
         self._docking_topic = str(self.get_parameter("docking_topic").value or "")
 
         self._pub_action = self.create_publisher(String, "/action", 10)
         self._pub_action_check = self.create_publisher(String, "/action_check", 10)
-        self.declare_parameter("line_move_topic", "/harv_robot/line_move")
+        self.declare_parameter("line_move_topic", "")
         _line_topic = str(self.get_parameter("line_move_topic").value or "").strip()
-        self._pub_line = self.create_publisher(String, _line_topic or "/harv_robot/line_move", 10)
+        self._pub_line = (
+            self.create_publisher(String, _line_topic, 10) if _line_topic else None
+        )
         self.declare_parameter("line_number_max", 10)
         try:
             self._line_number_max = int(self.get_parameter("line_number_max").value)
@@ -58,6 +62,10 @@ class ManualActionCommandNode(Node):
             self._pub_docking = None
 
     def send_line_move(self, data: str) -> None:
+        if not self._pub_line:
+            self.get_logger().warn("line_move_topic 비활성(운반 모드): 라인 명령 무시")
+            print("line_move 비활성", flush=True)
+            return
         msg = String()
         msg.data = data.strip()
         self._pub_line.publish(msg)
@@ -113,16 +121,22 @@ def main(args=None):
         elif cmd in ("entering_check", "goal_finish", "goal_return_finish"):
             node.send_check(cmd)
         elif cmd.lower() == "warehouse":
-            node.send_line_move("warehouse")
-        elif cmd.isdigit():
-            n = int(cmd, 10)
-            if 1 <= n <= node._line_number_max:
-                node.send_line_move(cmd)
+            if not node._pub_line:
+                print("warehouse: line_move 비활성 → scenario는 docking move_to_return 사용", file=sys.stderr)
             else:
-                print(
-                    f"라인 번호 1~{node._line_number_max} 만 허용: {cmd}",
-                    file=sys.stderr,
-                )
+                node.send_line_move("warehouse")
+        elif cmd.isdigit():
+            if not node._pub_line:
+                print("라인 이동 비활성(운반)", file=sys.stderr)
+            else:
+                n = int(cmd, 10)
+                if 1 <= n <= node._line_number_max:
+                    node.send_line_move(cmd)
+                else:
+                    print(
+                        f"라인 번호 1~{node._line_number_max} 만 허용: {cmd}",
+                        file=sys.stderr,
+                    )
         elif cmd in DOCK_CMDS:
             node.send_docking(cmd)
         else:
@@ -139,11 +153,18 @@ def main(args=None):
     spin_thread.start()
     _mx = node._line_number_max
     _zero_hint = ", 0→10" if _mx >= 10 else ""
-    print(
-        f"라인 1~{_mx} (TTY: 1~9{_zero_hint}; 10+는 줄 입력 '10' 등) | w: warehouse | "
-        "n/e/c/f/r | d/b 도킹 | q 종료",
-        flush=True,
-    )
+    if node._pub_line:
+        print(
+            f"라인 1~{_mx} (TTY: 1~9{_zero_hint}; 10+는 줄 입력 '10' 등) | w: warehouse | "
+            "n/e/c/f/r | d/b 도킹 | q 종료",
+            flush=True,
+        )
+    else:
+        print(
+            "운반(carry): d=도킹스테이션 b=warehouse복귀(move_to_return) | "
+            "n/e/c/f/r 디버그 | q 종료",
+            flush=True,
+        )
 
     if sys.stdin.isatty():
         old_attr = termios.tcgetattr(sys.stdin)
@@ -154,17 +175,23 @@ def main(args=None):
                 if key is None:
                     continue
                 if key in "123456789":
+                    if not node._pub_line:
+                        continue
                     n = int(key)
                     if n <= node._line_number_max:
                         node.send_line_move(key)
                     else:
                         print(f"라인 상한 {node._line_number_max}", flush=True)
                 elif key == "0":
+                    if not node._pub_line:
+                        continue
                     if node._line_number_max >= 10:
                         node.send_line_move("10")
                     else:
                         print(f"0 키(라인 10) 비활성: line_number_max={node._line_number_max}", flush=True)
                 elif key == "w":
+                    if not node._pub_line:
+                        continue
                     node.send_line_move("warehouse")
                 elif key == "n":
                     node.send("entering_next")
@@ -192,13 +219,19 @@ def main(args=None):
                 line = input().strip()
                 low = line.lower()
                 if low == "warehouse":
-                    node.send_line_move("warehouse")
-                elif line.isdigit():
-                    n = int(line, 10)
-                    if 1 <= n <= node._line_number_max:
-                        node.send_line_move(line)
+                    if node._pub_line:
+                        node.send_line_move("warehouse")
                     else:
-                        print(f"라인 1~{node._line_number_max} 만 허용.", flush=True)
+                        print("line_move 비활성", flush=True)
+                elif line.isdigit():
+                    if not node._pub_line:
+                        print("line_move 비활성", flush=True)
+                    else:
+                        n = int(line, 10)
+                        if 1 <= n <= node._line_number_max:
+                            node.send_line_move(line)
+                        else:
+                            print(f"라인 1~{node._line_number_max} 만 허용.", flush=True)
                 elif low in ("n", "entering_next"):
                     node.send("entering_next")
                 elif low in ("e", "entering_end"):

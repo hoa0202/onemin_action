@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
 코드2: 전체 시나리오 제어.
-라인/홈: /harv_robot/line_move (String) — "1"~"N" 라인 → line_positions + line_goal_links,
-  "warehouse" → line_positions 의 키 ``warehouse``(우선) 또는 최대 line_N; 그래프는 ``line_goal_links.warehouse`` 등.
-도킹: /harv_robot/docking_move move_to_docking_station → docking_positions + docking_goal_links,
-  IDLE 이고 마지막 라인 번호가 있으면 복귀용으로 저장.
-  move_to_return → 저장된 라인으로 다시 그래프 이동 후 entering_start~ 동일 수확 시나리오.
+
+carry_01 (운반): line_move 비활성(기본). /carry_robot/docking_move 만 사용.
+  move_to_docking_station → docking_positions + docking_goal_links
+  move_to_return → warehouse(라인 홈) 그래프 이동; 실패 시 YAML move_to_return 폴백
+
+harv (수확): line_move + 도킹. move_to_return → 저장 라인 복귀 후 entering_start~ 수확 시나리오.
 """
 import enum
 from typing import Any, Optional, Tuple
@@ -81,9 +82,10 @@ class ScenarioControllerNode(Node):
         self.declare_parameter("pose_type", "odom")
         self.declare_parameter("graph_auto_start_policy", "nearest")
         self.declare_parameter("graph_path_dot_min", 0.0)
-        self.declare_parameter("line_command_topic", "/harv_robot/line_move")
+        self.declare_parameter("carry_robot", True)
+        self.declare_parameter("line_command_topic", "")
         self.declare_parameter("line_number_max", 10)
-        self.declare_parameter("docking_topic", "/harv_robot/docking_move")
+        self.declare_parameter("docking_topic", "/carry_robot/docking_move")
         self.declare_parameter("docking_positions_file", "docking_positions.yaml")
         # 그래프 경유 세그먼트만 yaw_goal_tolerance 완화 (Nav2 controller_server)
         self.declare_parameter("graph_segment_relax_yaw", True)
@@ -111,6 +113,7 @@ class ScenarioControllerNode(Node):
             self._graph_path_dot_min = float(self.get_parameter("graph_path_dot_min").value)
         except (TypeError, ValueError):
             self._graph_path_dot_min = 0.0
+        self._carry_robot = _param_bool(self.get_parameter("carry_robot").value)
         self._line_command_topic = str(
             self.get_parameter("line_command_topic").value or ""
         ).strip()
@@ -227,9 +230,14 @@ class ScenarioControllerNode(Node):
 
         self._nav_client = ActionClient(self, NavigateToPose, self._nav2_action_name)
 
+        _line_desc = (
+            f"{self._line_command_topic!r} (1~{self._line_number_max}|warehouse)"
+            if self._line_command_topic
+            else "비활성(운반)"
+        )
         self.get_logger().info(
-            f"시나리오: {self._line_command_topic!r} (String 1~{self._line_number_max}|warehouse) "
-            f"| 도킹: {self._docking_topic!r}"
+            f"시나리오: line_move={_line_desc} | 도킹: {self._docking_topic!r} "
+            f"| carry_robot={self._carry_robot}"
         )
         _gstart = (
             repr(self._graph_start_node_id)
@@ -360,16 +368,26 @@ class ScenarioControllerNode(Node):
         stamp = self.get_clock().now().to_msg()
 
         if cmd == DOCK_RETURN_CMD:
-            n_mem = self._line_before_dock
-            if n_mem is not None and n_mem >= 1:
-                self._from_dock_return = True
-                self.get_logger().info(f"도킹 복귀 → 재기억 라인 {n_mem} (수확 시나리오)")
-                if not self._navigate_to_line(n_mem, stamp):
-                    self._from_dock_return = False
-                return
-            self.get_logger().warn(
-                "복귀할 저장 라인 없음 → docking_positions 의 move_to_return 폴백"
-            )
+            if self._carry_robot:
+                if self._navigate_to_warehouse_home(stamp):
+                    return
+                self.get_logger().warn(
+                    "warehouse 복귀 실패(line_positions·line_goal_links 등) → "
+                    "docking_positions move_to_return 폴백"
+                )
+            else:
+                n_mem = self._line_before_dock
+                if n_mem is not None and n_mem >= 1:
+                    self._from_dock_return = True
+                    self.get_logger().info(
+                        f"도킹 복귀 → 재기억 라인 {n_mem} (수확 시나리오)"
+                    )
+                    if not self._navigate_to_line(n_mem, stamp):
+                        self._from_dock_return = False
+                    return
+                self.get_logger().warn(
+                    "복귀할 저장 라인 없음 → docking_positions 의 move_to_return 폴백"
+                )
 
         if cmd not in (DOCK_STATION_CMD, DOCK_RETURN_CMD):
             self.get_logger().warn(f"알 수 없는 도킹 명령: {cmd!r}")
@@ -378,7 +396,9 @@ class ScenarioControllerNode(Node):
         self._after_nav_is_warehouse_home = False
 
         if cmd == DOCK_STATION_CMD:
-            if self._line_number is not None and self._line_number >= 1:
+            if self._carry_robot:
+                self._line_before_dock = None
+            elif self._line_number is not None and self._line_number >= 1:
                 self._line_before_dock = self._line_number
                 self.get_logger().info(
                     f"도킹 이동 전 라인 {self._line_before_dock} 저장 (복귀 시 사용)"

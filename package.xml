@@ -3,7 +3,7 @@
 <package format="3">
   <name>onemin_action</name>
   <version>0.0.1</version>
-  <description>Line entrance position recording and scenario control</description>
+  <description>Carry robot: docking and warehouse return (carry_01); scenario and waypoint tools</description>
   <maintainer email="user@todo.todo">user</maintainer>
   <license>Apache-2.0</license>
 

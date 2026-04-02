@@ -57,9 +57,14 @@ def generate_launch_description():
             description="간선·첫구간 진행방향·목표벡터 dot 최소(0=뒷걸음 금지, 음수면 약간 허용)",
         ),
         DeclareLaunchArgument(
+            "carry_robot",
+            default_value="true",
+            description="true=운반: move_to_return→warehouse, line_move 기본 비활성",
+        ),
+        DeclareLaunchArgument(
             "line_command_topic",
-            default_value="/harv_robot/line_move",
-            description="라인/홈 std_msgs/String: 1~N 또는 warehouse",
+            default_value="",
+            description="비우면 라인 미구독(운반). 수확 시 /harv_robot/line_move 등",
         ),
         DeclareLaunchArgument(
             "line_number_max",
@@ -68,7 +73,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "docking_topic",
-            default_value="/harv_robot/docking_move",
+            default_value="/carry_robot/docking_move",
             description="도킹 명령 std_msgs/String (docking_positions.yaml 키와 동일)",
         ),
         DeclareLaunchArgument(
@@ -127,6 +132,7 @@ def generate_launch_description():
                 "pose_type": LaunchConfiguration("pose_type"),
                 "graph_auto_start_policy": LaunchConfiguration("graph_auto_start_policy"),
                 "graph_path_dot_min": LaunchConfiguration("graph_path_dot_min"),
+                "carry_robot": LaunchConfiguration("carry_robot"),
                 "line_command_topic": LaunchConfiguration("line_command_topic"),
                 "line_number_max": LaunchConfiguration("line_number_max"),
                 "docking_topic": LaunchConfiguration("docking_topic"),

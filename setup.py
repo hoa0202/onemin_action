@@ -24,7 +24,7 @@ setup(
     zip_safe=True,
     maintainer="user",
     maintainer_email="user@todo.todo",
-    description="Line entrance position recording and scenario control",
+    description="Carry robot scenario: docking and warehouse return",
     license="Apache-2.0",
     tests_require=["pytest"],
     entry_points={
