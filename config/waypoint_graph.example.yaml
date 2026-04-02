@@ -15,8 +15,10 @@ graph_build:
   excluded_node_ids: []
 
 # 라인 N: line_positions 의 line_N 까지 마지막 연결 허용 노드
+# (선택) line_positions 에 warehouse 항목이 있을 때 동일 키로 연결
 # line_goal_links:
 #   1: [wp_3]
+#   warehouse: [wp_7]
 
 # 도킹: move_to_docking_station 만 보통 필요. 링크 노드는 docking_positions 좌표와 가장 가까운 WP
 #   (무작정 wp_1 이면 wp_1–dock 직선이 체인 방향과 꺾여 경로/플래너만 괴상해질 수 있음)

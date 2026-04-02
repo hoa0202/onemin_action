@@ -17,7 +17,6 @@ from __future__ import annotations
 import heapq
 import math
 import os
-import re
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
@@ -140,15 +139,19 @@ def _build_adjacency_with_synthetic_goal(
     return adj, goal_id
 
 
-def _build_adjacency(
+def _build_adjacency_line_goal_link(
     nodes: Dict[str, Any],
     edges: List[Any],
-    line_number: int,
+    link_key: str,
     goal_pose: PoseStamped,
     line_goal_links: Dict[str, Any],
 ) -> Tuple[Dict[str, List[Tuple[str, float]]], str]:
-    goal_id = f"__line_{line_number}__"
-    key = str(line_number)
+    """
+    ``line_goal_links`` 의 키와 동일한 문자열(``\"1\"``, ``\"warehouse\"`` 등)으로 합성 목표 연결.
+    """
+    sk = "".join(c if c.isalnum() else "_" for c in str(link_key).strip())
+    goal_id = f"__line_goal_{sk}__"
+    key = str(link_key).strip()
     link_nodes = line_goal_links.get(key)
     return _build_adjacency_with_synthetic_goal(
         nodes, edges, goal_pose, goal_id, link_nodes
@@ -316,10 +319,10 @@ def _dijkstra(
     return path
 
 
-def plan_path_to_line(
+def plan_path_to_line_goal_link_key(
     data_dir: str,
     graph_basename: str,
-    line_number: int,
+    link_key: str,
     start_node_id: str,
     line_pose: PoseStamped,
     stamp: Optional[Time] = None,
@@ -328,12 +331,14 @@ def plan_path_to_line(
     path_dot_min: float = 0.0,
 ) -> Optional[Tuple[List[PoseStamped], str]]:
     """
-    line_pose: line_positions에서 읽은 라인 N 목표 (마지막 웨이포인트에 사용).
+    ``line_pose`` 목표까지, ``line_goal_links[link_key]`` 로 그래프와 연결 (다익스트라 + 역행 검사).
 
-    start_node_id 비움 + current_pose: 가까운 노드 순으로 후보 시도 → 다익스트라 경로가
-    그래프 순서상 ‘다음 구간’과 역행(dot_min)하지 않을 때만 채택.
-    start_node_id 지정: 해당 노드만 (current_pose 있으면 같은 검사 적용).
+    ``link_key`` 예: ``\"1\"`` … 라인 번호 문자열, ``\"warehouse\"`` … ``line_positions`` 의 warehouse 항목.
     """
+    lk = (link_key or "").strip()
+    if not lk:
+        return None
+
     path = os.path.join(data_dir, graph_basename)
     raw = _load_graph_yaml(path)
     nodes = raw.get("nodes") or {}
@@ -344,7 +349,9 @@ def plan_path_to_line(
     if not nodes:
         return None
 
-    adj, goal_id = _build_adjacency(nodes, edges, line_number, line_pose, line_goal_links)
+    adj, goal_id = _build_adjacency_line_goal_link(
+        nodes, edges, lk, line_pose, line_goal_links
+    )
     dist_to_goal = _distances_to_goal(adj, goal_id)
 
     fixed = (start_node_id or "").strip()
@@ -406,150 +413,35 @@ def plan_path_to_line(
     return out, start
 
 
-def highest_numbered_wp_node_id(nodes: Dict[str, Any]) -> Optional[str]:
-    """노드 키 ``wp_<정수>`` 중 번호가 가장 큰 id (warehouse 홈 등)."""
-    best_n = -1
-    best_id: Optional[str] = None
-    pat = re.compile(r"^wp_(\d+)$")
-    for nid in nodes:
-        m = pat.match(str(nid))
-        if not m:
-            continue
-        n = int(m.group(1))
-        if n > best_n:
-            best_n = n
-            best_id = str(nid)
-    return best_id
-
-
-def _incoming_link_nodes_for_target(
-    edges: List[Any], nodes: Dict[str, Any], target_id: str
-) -> List[str]:
-    """``to == target_id`` 인 간선의 ``from`` 목록. 없으면 호출부에서 ``[target_id]`` 로 폴백."""
-    seen: List[str] = []
-    found = set()
-    for e in edges:
-        if not isinstance(e, dict):
-            continue
-        if e.get("to") != target_id:
-            continue
-        u = e.get("from")
-        if u in nodes and u not in found:
-            found.add(str(u))
-            seen.append(str(u))
-    return seen
-
-
-def get_warehouse_home_pose(
+def plan_path_to_line(
     data_dir: str,
     graph_basename: str,
-    stamp: Optional[Time] = None,
-) -> Optional[PoseStamped]:
-    """가장 큰 번호의 ``wp_*`` 노드 포즈 (그래프 미경유 단일 목표용)."""
-    path = os.path.join(data_dir, graph_basename)
-    raw = _load_graph_yaml(path)
-    nodes = raw.get("nodes") or {}
-    home_id = highest_numbered_wp_node_id(nodes)
-    if not home_id or home_id not in nodes:
-        return None
-    return _pose_from_node_entry(nodes[home_id], stamp=stamp)
-
-
-def plan_path_to_warehouse_home(
-    data_dir: str,
-    graph_basename: str,
+    line_number: int,
     start_node_id: str,
+    line_pose: PoseStamped,
     stamp: Optional[Time] = None,
     current_pose: Optional[PoseStamped] = None,
     auto_start_policy: str = "nearest",
     path_dot_min: float = 0.0,
 ) -> Optional[Tuple[List[PoseStamped], str]]:
     """
-    ``wp_*`` 중 최대 번호 노드를 목표(홈/warehouse)로 하는 그래프 경로.
-    합성 목표 간선은 ``line_goal_links``/도킹과 동일하게 ``link_nodes → goal`` 유클리드 연결.
+    line_pose: line_positions에서 읽은 라인 N 목표 (마지막 웨이포인트에 사용).
+
+    start_node_id 비움 + current_pose: 가까운 노드 순으로 후보 시도 → 다익스트라 경로가
+    그래프 순서상 ‘다음 구간’과 역행(dot_min)하지 않을 때만 채택.
+    start_node_id 지정: 해당 노드만 (current_pose 있으면 같은 검사 적용).
     """
-    path = os.path.join(data_dir, graph_basename)
-    raw = _load_graph_yaml(path)
-    nodes = raw.get("nodes") or {}
-    edges = raw.get("edges") or []
-
-    if not nodes:
-        return None
-
-    home_id = highest_numbered_wp_node_id(nodes)
-    if not home_id or home_id not in nodes:
-        return None
-
-    goal_pose = _pose_from_node_entry(nodes[home_id], stamp=stamp)
-    link_nodes = _incoming_link_nodes_for_target(edges, nodes, home_id)
-    if not link_nodes:
-        link_nodes = [home_id]
-
-    goal_id = "__warehouse_home__"
-    adj, goal_id = _build_adjacency_with_synthetic_goal(
-        nodes, edges, goal_pose, goal_id, link_nodes
+    return plan_path_to_line_goal_link_key(
+        data_dir,
+        graph_basename,
+        str(int(line_number)),
+        start_node_id,
+        line_pose,
+        stamp=stamp,
+        current_pose=current_pose,
+        auto_start_policy=auto_start_policy,
+        path_dot_min=path_dot_min,
     )
-    dist_to_goal = _distances_to_goal(adj, goal_id)
-
-    fixed = (start_node_id or "").strip()
-    cx: Optional[float] = None
-    cy: Optional[float] = None
-    if current_pose is not None:
-        cx = current_pose.pose.position.x
-        cy = current_pose.pose.position.y
-
-    if fixed:
-        if fixed not in nodes:
-            return None
-        candidates = [fixed]
-    else:
-        if cx is None or cy is None:
-            return None
-        candidates = _sorted_start_candidates(
-            nodes, dist_to_goal, cx, cy, auto_start_policy
-        )
-        if not candidates:
-            return None
-
-    node_path: Optional[List[str]] = None
-    start: Optional[str] = None
-    for u in candidates:
-        p = _dijkstra(adj, u, goal_id)
-        if not p:
-            continue
-        if cx is not None and cy is not None:
-            if not _path_forward_along_path(
-                p, nodes, goal_id, goal_pose, cx, cy, path_dot_min
-            ):
-                continue
-        node_path = p
-        start = u
-        break
-
-    if not node_path or start is None:
-        return None
-
-    out: List[PoseStamped] = []
-    for i, nid in enumerate(node_path):
-        if nid == goal_id:
-            final = PoseStamped()
-            final.header.frame_id = goal_pose.header.frame_id
-            final.header.stamp = stamp if stamp is not None else goal_pose.header.stamp
-            final.pose = goal_pose.pose
-            out.append(final)
-        else:
-            nnext = node_path[i + 1]
-            if nnext == goal_id:
-                tx = float(goal_pose.pose.position.x)
-                ty = float(goal_pose.pose.position.y)
-            else:
-                pn = nodes[nnext].get("position", {})
-                tx = float(pn.get("x", 0.0))
-                ty = float(pn.get("y", 0.0))
-            out.append(
-                _graph_node_pose_tangent_to_next(nodes[nid], stamp, tx, ty)
-            )
-    return out, start
 
 
 def plan_path_to_named_goal(

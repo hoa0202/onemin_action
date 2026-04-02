@@ -2,7 +2,7 @@
 """
 코드2: 전체 시나리오 제어.
 라인/홈: /harv_robot/line_move (String) — "1"~"N" 라인 → line_positions + line_goal_links,
-  "warehouse" → waypoint_graph 의 최대 번호 wp_* 노드(홈).
+  "warehouse" → line_positions 의 키 ``warehouse``(우선) 또는 최대 line_N; 그래프는 ``line_goal_links.warehouse`` 등.
 도킹: /harv_robot/docking_move move_to_docking_station → docking_positions + docking_goal_links,
   IDLE 이고 마지막 라인 번호가 있으면 복귀용으로 저장.
   move_to_return → 저장된 라인으로 다시 그래프 이동 후 entering_start~ 동일 수확 시나리오.
@@ -26,12 +26,16 @@ from rclpy.time import Time
 from tf2_geometry_msgs.tf2_geometry_msgs import do_transform_pose
 from tf2_ros import Buffer, TransformListener
 
-from onemin_action.line_pose_loader import get_data_dir, load_line_pose, load_pose_by_key
+from onemin_action.line_pose_loader import (
+    get_data_dir,
+    load_line_pose,
+    load_pose_by_key,
+    warehouse_pose_and_graph_link_key,
+)
 from onemin_action.waypoint_graph_planner import (
-    get_warehouse_home_pose,
     plan_path_to_line,
+    plan_path_to_line_goal_link_key,
     plan_path_to_named_goal,
-    plan_path_to_warehouse_home,
 )
 
 DOCK_STATION_CMD = "move_to_docking_station"
@@ -432,16 +436,26 @@ class ScenarioControllerNode(Node):
         self._send_current_nav_goal()
 
     def _navigate_to_warehouse_home(self, stamp) -> bool:
-        """그래프 상 최대 wp_* 노드로 이동. 완료 후 entering_start 없이 IDLE."""
+        """line_positions 의 ``warehouse`` 또는 최대 line_N 목표. 그래프는 ``line_goal_links`` 의 동일 키."""
+        resolved = warehouse_pose_and_graph_link_key(self._data_dir, stamp=stamp)
+        if resolved is None:
+            self.get_logger().warn(
+                "warehouse: line_positions 에 warehouse 또는 line_N 없음."
+            )
+            return False
+        pose, link_key = resolved
+
         if self._use_graph:
             cur = self._last_robot_pose
             if cur is None:
                 self.get_logger().error("warehouse: 그래프 모드인데 pose 미수신.")
                 return False
-            planned = plan_path_to_warehouse_home(
+            planned = plan_path_to_line_goal_link_key(
                 self._data_dir,
                 self._graph_file,
+                link_key,
                 self._graph_start_node_id,
+                pose,
                 stamp=stamp,
                 current_pose=cur,
                 auto_start_policy=self._graph_auto_start_policy,
@@ -449,27 +463,21 @@ class ScenarioControllerNode(Node):
             )
             if not planned:
                 self.get_logger().warn(
-                    "warehouse 홈 경로 실패 (wp_* 노드·간선·역행 검사 확인)."
+                    f"warehouse 경로 실패 (line_goal_links.{link_key!r}·간선·역행 검사)."
                 )
                 return False
             poses, eff_start = planned
             self._nav_targets = poses
             self._nav_target_idx = 0
             self.get_logger().info(
-                f"warehouse 홈: {len(poses)}포인트, 시작노드={eff_start}"
+                f"warehouse → link {link_key!r}: {len(poses)}포인트, 시작노드={eff_start}"
             )
         else:
-            pose = get_warehouse_home_pose(
-                self._data_dir, self._graph_file, stamp=stamp
-            )
-            if pose is None:
-                self.get_logger().warn(
-                    "warehouse: waypoint_graph 에 wp_* 노드 없음 (또는 파일 없음)."
-                )
-                return False
             self._nav_targets = [pose]
             self._nav_target_idx = 0
-            self.get_logger().info("warehouse 홈: 직선 1세그먼트 (그래프 미사용).")
+            self.get_logger().info(
+                f"warehouse → link {link_key!r} 직선 (그래프 미사용)."
+            )
 
         self._line_number = None
         self._after_nav_is_docking = False

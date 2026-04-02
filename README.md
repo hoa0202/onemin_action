@@ -2,6 +2,38 @@
 
 라인 입구 출발 위치 기록 및 시나리오 제어용 ROS2 패키지.
 
+## 빠른 사용 흐름
+
+1. **데이터 준비** (패키지 `data/` 또는 워크스페이스 `src/onemin_action/data/`)
+   - `line_positions.yaml` — `line_1` … 및 (선택) `warehouse`
+   - `waypoint_graph.yaml` — 그래프 모드 시 `nodes`, `edges`, `line_goal_links`
+2. **빌드**
+
+   ```bash
+   cd /path/to/workspace
+   colcon build --packages-select onemin_action
+   source install/setup.bash
+   ```
+
+3. **시나리오 노드**
+
+   ```bash
+   ros2 launch onemin_action scenario_control.launch.py
+   ```
+
+4. **라인 / 창고 이동** (별 터미널)
+
+   ```bash
+   ros2 topic pub --once /harv_robot/line_move std_msgs/String "{data: '2'}"
+   ros2 topic pub --once /harv_robot/line_move std_msgs/String "{data: 'warehouse'}"
+   ```
+
+5. **수확 시퀀스** (라인 도착 후)  
+   다른 노드가 `/action_check` 등으로 `entering_check` → `goal_finish` → `goal_return_finish` 를 보내야 다음 라인 입력으로 돌아감.  
+   **`WAIT_GOAL_FINISH` / `WAIT_GOAL_RETURN_FINISH` 상태에서는 `line_move`가 무시된다** — 로그에 `line_move 무시`가 나오면 수확 플로우가 끝날 때까지 기다리거나 `entering_check`/`goal_*`를 맞춰 줄 것.
+
+---
+
 ## 코드1: 라인 위치 기록 (record_line_positions_node)
 
 로봇을 수동으로 각 라인 입구 출발 지점에 두고, 현재 위치·방향을 YAML에 1번부터 저장한다.  
@@ -36,11 +68,32 @@ ros2 run onemin_action record_line_positions_node
 
 ```yaml
 line_1:
-  frame_id: "odom"
-  position: { x: -0.21, y: -0.02, z: 0.0 }
-  orientation: { x: 0.0, y: 0.02, z: -0.005, w: -0.999 }
+  frame_id: "odom_1"
+  position: { x: 0.0, y: 0.0, z: 0.0 }
+  orientation: { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }
 line_2:
   ...
+# (선택) 수확 창고/홈 목표. 있으면 토픽 warehouse 는 이 pose 로 간다. 없으면 최대 번호 line_N 폴백.
+warehouse:
+  frame_id: "odom_1"
+  position: { x: 0.0, y: 0.0, z: 0.0 }
+  orientation: { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }
+```
+
+**그래프 모드**에서는 반드시 `waypoint_graph.yaml` 의 `line_goal_links` 에 **`warehouse`** 키를 넣고, 목표 pose로 이어질 **그래프 노드(wp_*)** 목록을 적는다.
+
+- 한 노드만 두면 Nav2 global costmap 상 그 구간이 막혀 `"no valid path"` 가 날 수 있다. **같은 창고 목표에 대해 여러 wp 를 나열**하면 (예: `wp_2`, `wp_1`) 다익스트라가 비용이 작은 쪽으로 골라, 비어 있는 통로 쪽에서만 마지막까지 가게 할 수 있다.
+- `line_goal_links` 의 키는 문자열로 통일된다 (`1`, `2`, `warehouse` 등).
+
+예 (`config/waypoint_graph.example.yaml` 참고):
+
+```yaml
+line_goal_links:
+  "1": [wp_5]
+  "2": [wp_6]
+  warehouse:
+    - wp_2
+    - wp_1
 ```
 
 ---
@@ -59,14 +112,14 @@ ros2 run onemin_action manual_action_command_node
 
 - **1~9** : `line_move_topic`에 해당 라인 번호 문자열 (`"1"` … `"9"`)
 - **0** : 라인 **10** (`line_number_max` ≥ 10일 때만)
-- **w** : `warehouse` 발행 → 시나리오에서 그래프 **최대 번호 `wp_*` 노드**(홈)로 이동
+- **w** : `warehouse` 발행 → `line_positions` 의 **`warehouse`** 항목(없으면 최대 `line_N`)
 - **n** : `/action` → `entering_next`
 - **e** : `/action` → `entering_end`
 - **c** : `/action_check` → `entering_check`
 - **f** : `/action_check` → `goal_finish`
 - **r** : `/action_check` → `goal_return_finish`
 - **d** : 도킹 스테이션 (`move_to_docking_station`)
-- **b** : 도킹 복그 (`move_to_return`)
+- **b** : 도킹 복귀 (`move_to_return`)
 - **q** 또는 **Ctrl+C** : 노드 종료
 
 라인 번호가 **10 초과**이면 TTY 한 글자로는 부족하므로, **표준 입력 한 줄 모드**(stdin이 TTY가 아닐 때)나 **한 번만 전송** 모드에서 `11` 같은 문자열을 넘긴다.
@@ -112,7 +165,7 @@ ros2 run onemin_action manual_action_command_node --ros-args \
 ## 코드2: 시나리오 제어 (scenario_controller_node)
 
 라인 번호(**String**) 또는 **warehouse** 수신 → YAML·웨이포인트 그래프로 Nav2 이동 → (라인일 때만) `entering_start` 발행 → `entering_check` 확인 → `goal_finish` 로그 → `goal_return_finish` 대기 후 다시 입력 대기.  
-**warehouse** 로 홈에 도착하면 **수확 시나리오 없이** IDLE로 돌아간다.
+**warehouse** 로 도착하면 **수확 시나리오 없이** IDLE로 돌아간다.
 
 ### 실행
 
@@ -127,6 +180,8 @@ ros2 topic pub --once /harv_robot/line_move std_msgs/String "{data: '1'}"
 ros2 topic pub --once /harv_robot/line_move std_msgs/String "{data: 'warehouse'}"
 ```
 
+Nav2 `nav_goal_output_frame` 을 map 으로 맞춰야 할 환경이면 launch 인자로 넘긴다 (README는 패키지 기본; 로봇 쪽 launch에서 override).
+
 ### 파라미터 (일부)
 
 | 파라미터                       | 기본값               | 설명 |
@@ -138,28 +193,42 @@ ros2 topic pub --once /harv_robot/line_move std_msgs/String "{data: 'warehouse'}
 | `line_number_max`              | `10`                 | 허용 라인 번호 상한 (`"11"` 등은 거부) |
 | `use_waypoint_graph`           | `true`               | `waypoint_graph.yaml` 경유 |
 | `waypoint_graph_file`          | `waypoint_graph.yaml` | 데이터 디렉터리 기준 그래프 파일 |
+| `graph_path_dot_min`           | `0.0`                | 역행 검사(음수면 약간 허용). 막히면 튜닝 |
 | `docking_topic`                | `/harv_robot/docking_move` | 도킹 명령 (`std_msgs/String`) |
 
-`scenario_control.launch.py` 에서 `line_command_topic`, `line_number_max` 를 넘길 수 있다.
+`scenario_control.launch.py` 에서 `line_command_topic`, `line_number_max` 등을 넘길 수 있다.
 
 ### 토픽
 
-- 구독: `line_command_topic` (`std_msgs/String`) — `"1"`…`"N"` 진입 라인, 또는 **`warehouse`** (홈 = 그래프에서 번호가 가장 큰 `wp_*` 노드)
-- 구독: `docking_topic` (설정 시) — 도킹/복그
+- 구독: `line_command_topic` (`std_msgs/String`) — `"1"`…`"N"` 진입 라인, 또는 **`warehouse`**
+- 구독: `docking_topic` (설정 시) — 도킹/복귀
 - 구독: `/action_check` (`std_msgs/String`) — `entering_check`, `goal_finish`, `goal_return_finish`
 - 발행: `/action` (`std_msgs/String`) — `entering_start` (라인 도착 후; warehouse·도킹 직행은 생략)
 
 ### 데이터
 
-- `data/line_positions.yaml` — 라인 목표 (`line_N`).
-- `data/waypoint_graph.yaml` — 노드·간선·`line_goal_links` 등 (그래프 모드).
+- `data/line_positions.yaml` — 라인 목표 (`line_N`), (선택) `warehouse`
+- `data/waypoint_graph.yaml` — 노드·간선·`line_goal_links` 등 (그래프 모드)
+
+저장소 `.gitignore` 에는 운영용 `data/line_positions.yaml` · `waypoint_graph.yaml` 이 제외될 수 있음 — 팀원은 `config/*.example.yaml` 을 참고해 로컬 `data/` 에 복사해 사용한다.
+
+---
+
+## 트러블슈팅 (요약)
+
+| 증상 | 점검 |
+|------|------|
+| `warehouse 경로 실패 (line_goal_links.'warehouse'…)` | `waypoint_graph.yaml` 에 `line_goal_links.warehouse` 및 최소 한 개 이상 `wp_*` 링크 |
+| Nav2 `no valid path found` (그래프상 연결은 있는데) | global costmap 에 막힌 영역; `warehouse` 링크에 **여러 wp** 추가해 우회, 또는 맵/인플레이션 조정 |
+| `wait_goal_finish 에서는 line_move 무시` | 수확 플로우 끝까지 `/action_check` 시퀀스 대기 |
+| `entering_check` 타임아웃 반복 | 상대 노드가 `entering_check` 를 보내는지, 토픽 이름·메시지 문자열 일치 여부 |
 
 ---
 
 ## 빌드
 
 ```bash
-cd /path/to/onemin_action
+cd /path/to/workspace
 colcon build --packages-select onemin_action
 source install/setup.bash
 ```
