@@ -105,6 +105,65 @@ graph_build:
     - [wp_1, wp_4]
   excluded_node_ids: []
   # chain_node_order: [wp_1, wp_2, wp_3]
+
+nodes:
+  wp_1:
+    frame_id: odom_1
+    position:
+      x: 1.291922
+      y: -0.881204
+      z: 0.0
+    orientation:
+      x: -0.000968
+      y: 0.001286
+      z: 0.011866
+      w: 0.999928
+  wp_2:
+    frame_id: odom_1
+    position:
+      x: 1.362242
+      y: 0.128558
+      z: -0.0
+    orientation:
+      x: 0.002169
+      y: -0.001405
+      z: 0.009473
+      w: 0.999952
+  wp_3:
+    frame_id: odom_1
+    position:
+      x: 2.621927
+      y: 0.147455
+      z: 0.0
+    orientation:
+      x: 0.013911
+      y: -0.006187
+      z: -0.669609
+      w: 0.742558
+edges:
+- from: wp_1
+  to: wp_2
+  cost: 1.012208
+- from: wp_2
+  to: wp_1
+  cost: 1.012208
+- from: wp_2
+  to: wp_3
+  cost: 1.259827
+- from: wp_3
+  to: wp_2
+  cost: 1.259827
+line_goal_links: 
+  warehouse: 
+  - wp_1
+  - wp_2
+docking_goal_links:
+  move_to_docking_station:
+  - wp_3
+  move_to_return:
+  - wp_1
+  - wp_2
+graph_build: {}
 ```
 
 ---
