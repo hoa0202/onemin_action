@@ -176,6 +176,7 @@ class ScenarioControllerNode(Node):
 
         self._state = State.IDLE
         self._line_number: Optional[int] = None
+        self._current_start_action: str = "entering_start"
         self._entering_check_received = False
         self._entering_check_retry_count = 0
         self._goal_finish_received = False
@@ -706,10 +707,12 @@ class ScenarioControllerNode(Node):
             self._state = State.IDLE
 
     def _do_entering_start(self) -> None:
+        action_name = "go_to_return" if self._from_dock_return else "entering_start"
+        self._current_start_action = action_name
         msg = String()
-        msg.data = "entering_start"
+        msg.data = action_name
         self._action_pub.publish(msg)
-        self.get_logger().info("/action 발행: entering_start")
+        self.get_logger().info(f"/action 발행: {action_name}")
         self._entering_check_received = False
         self._entering_check_retry_count = 0
         self._state = State.WAIT_ENTERING_CHECK
@@ -731,10 +734,11 @@ class ScenarioControllerNode(Node):
             self.get_logger().warn("entering_check 미수신, 최대 재전송 횟수 도달 → 다음 단계로.")
             self._state = State.WAIT_GOAL_FINISH
             return
+        action_name = getattr(self, "_current_start_action", "entering_start")
         msg = String()
-        msg.data = "entering_start"
+        msg.data = action_name
         self._action_pub.publish(msg)
-        self.get_logger().info("entering_check 미수신 → entering_start 재전송.")
+        self.get_logger().info(f"entering_check 미수신 → {action_name} 재전송.")
         self._entering_check_timer = self.create_timer(
             self._entering_check_timeout, self._cb_entering_check_timeout
         )
