@@ -660,6 +660,11 @@ class ScenarioControllerNode(Node):
             self._state = State.IDLE
 
     def _cb_nav_result_done(self, future: Future) -> None:
+        if future is not self._nav_result_future:
+            self.get_logger().warn(
+                "stale Nav2 result 콜백 무시 (인터리브된 이전 goal). 현재 active future 와 다름."
+            )
+            return
         try:
             future.result().result
             status = future.result().status
@@ -759,12 +764,19 @@ class ScenarioControllerNode(Node):
                 self._state = State.WAIT_GOAL_RETURN_FINISH
                 self.get_logger().info("goal_return_finish 대기 중...")
         elif data == "goal_return_finish":
+            if self._state != State.WAIT_GOAL_RETURN_FINISH:
+                self.get_logger().warn(
+                    f"goal_return_finish 무시 (상태={self._state.value}). "
+                    "WAIT_GOAL_RETURN_FINISH 일 때만 처리."
+                )
+                return
             self.get_logger().info("[goal_return_finish] 수신 → 다시 라인 입력 대기.")
             print("[goal_return_finish] 수신 → 다시 라인 입력 대기.", flush=True)
-            msg = String()
-            msg.data = "entering_end2"
-            self._action_pub.publish(msg)
-            self.get_logger().info("/action 발행: entering_end2")
+            # 디버깅용 종료 신호 (외부 소비처 없음). 필요 시 주석 해제.
+            # msg = String()
+            # msg.data = "entering_end2"
+            # self._action_pub.publish(msg)
+            # self.get_logger().info("/action 발행: entering_end2")
             if self._from_dock_return:
                 self._from_dock_return = False
                 self._line_before_dock = None
