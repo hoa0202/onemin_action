@@ -23,6 +23,7 @@ class HarvestDebugNode(Node):
         self.harv_robot_line_move_pub = self.create_publisher(String, '/harv_robot/line_move', 10)
         self.harv_robot_docking_move_pub = self.create_publisher(String, '/harv_robot/docking_move', 10)
         self.carry_robot_docking_move_pub = self.create_publisher(String, '/carry_robot/docking_move', 10)
+        self.action_pub = self.create_publisher(String, '/action', 10)
 
         # =========================
         # Subscribers
@@ -70,6 +71,9 @@ class HarvestDebugNode(Node):
         print("")
         print("[운반 로봇 도킹]")
         print("carry_docking station / return")
+        print("")
+        print("[수동 액션 (/action)]")
+        print("end2  → entering_end")
         print("")
         print("help / quit")
         print("====================================================\n")
@@ -172,6 +176,11 @@ class HarvestDebugNode(Node):
                     self.publish_string(self.harv_robot_docking_move_pub,
                                         '/harv_robot/docking_move',
                                         "move_to_return")
+                continue
+
+            # /action (manual trigger)
+            if user_input == 'end2':
+                self.publish_string(self.action_pub, '/action', 'entering_end')
                 continue
 
             # carry docking
