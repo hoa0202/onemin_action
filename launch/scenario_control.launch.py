@@ -138,17 +138,27 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "dock_rear_offset",
+            default_value="0.8",
+            description="대상 후방(-x)으로 떨어져 정렬·정지할 최종 거리(m)",
+        ),
+        DeclareLaunchArgument(
+            "dock_approach_dist",
+            default_value="0.5",
+            description="최종점보다 이만큼 더 뒤(진입점)에서 헤딩 정렬 후 직진 마무리(m)",
+        ),
+        DeclareLaunchArgument(
+            "dock_k_cross",
             default_value="1.0",
-            description="대상 후방(-x)으로 떨어져 정렬·정지할 거리(m)",
+            description="직진 마무리 cross-track(도킹 축 이탈) 보정 게인",
         ),
         DeclareLaunchArgument(
             "dock_pos_tol",
-            default_value="0.08",
+            default_value="0.02",
             description="도킹 완료 위치 오차 임계(m)",
         ),
         DeclareLaunchArgument(
             "dock_yaw_tol",
-            default_value="0.05",
+            default_value="0.01",
             description="도킹 완료 헤딩 오차 임계(rad)",
         ),
         Node(
@@ -188,6 +198,8 @@ def generate_launch_description():
                 "dock_robot_frame": LaunchConfiguration("dock_robot_frame"),
                 "cmd_vel_topic": LaunchConfiguration("cmd_vel_topic"),
                 "dock_rear_offset": LaunchConfiguration("dock_rear_offset"),
+                "dock_approach_dist": LaunchConfiguration("dock_approach_dist"),
+                "dock_k_cross": LaunchConfiguration("dock_k_cross"),
                 "dock_pos_tol": LaunchConfiguration("dock_pos_tol"),
                 "dock_yaw_tol": LaunchConfiguration("dock_yaw_tol"),
             }],
