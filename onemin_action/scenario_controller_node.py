@@ -131,6 +131,8 @@ class ScenarioControllerNode(Node):
         self.declare_parameter("dock_rear_offset", 1.0)
         # 최종 지점보다 이만큼 더 뒤(진입점)에서 헤딩 정렬 후 직진 마무리
         self.declare_parameter("dock_approach_dist", 1.0)
+        # 진입점 도달 후, 헤딩 정렬 직전 로봇 헤딩으로 단순 직진할 거리(m). 0=creep 없음
+        self.declare_parameter("dock_entry_forward", 0.0)
         # 진입점 도달 판정(위치) 허용 오차
         self.declare_parameter("dock_entry_pos_tol", 0.12)
         # 직진 마무리 구간에서 허용하는 최대 각속도(제자리 선회 금지)
@@ -146,8 +148,8 @@ class ScenarioControllerNode(Node):
         self.declare_parameter("dock_min_ang", 0.05)
         # 목표점 방위 오차가 이보다 크면 직진 멈추고 제자리 선회부터
         self.declare_parameter("dock_coarse_ang", 0.6)
-        self.declare_parameter("dock_pos_tol", 0.08)
-        self.declare_parameter("dock_yaw_tol", 0.05)
+        self.declare_parameter("dock_pos_tol", 0.10)
+        self.declare_parameter("dock_yaw_tol", 0.06)
         self.declare_parameter("dock_settle_cycles", 5)
         self.declare_parameter("dock_tf_timeout_sec", 0.2)
         self.declare_parameter("dock_lost_timeout_sec", 3.0)
@@ -231,6 +233,7 @@ class ScenarioControllerNode(Node):
 
         self._dock_rear_offset = _pf("dock_rear_offset", 1.0)
         self._dock_approach_dist = _pf("dock_approach_dist", 1.0)
+        self._dock_entry_forward = _pf("dock_entry_forward", 0.0)
         self._dock_entry_pos_tol = _pf("dock_entry_pos_tol", 0.12)
         self._dock_straight_max_ang = _pf("dock_straight_max_ang", 0.3)
         self._dock_k_cross = _pf("dock_k_cross", 1.0)
@@ -242,8 +245,8 @@ class ScenarioControllerNode(Node):
         self._dock_max_ang = _pf("dock_max_ang", 0.6)
         self._dock_min_ang = _pf("dock_min_ang", 0.05)
         self._dock_coarse_ang = _pf("dock_coarse_ang", 0.6)
-        self._dock_pos_tol = _pf("dock_pos_tol", 0.08)
-        self._dock_yaw_tol = _pf("dock_yaw_tol", 0.05)
+        self._dock_pos_tol = _pf("dock_pos_tol", 0.10)
+        self._dock_yaw_tol = _pf("dock_yaw_tol", 0.06)
         try:
             self._dock_settle_cycles = max(1, int(self.get_parameter("dock_settle_cycles").value))
         except (TypeError, ValueError):
@@ -270,6 +273,7 @@ class ScenarioControllerNode(Node):
         self._dock_settle_count = 0
         self._dock_phase = "to_entry"
         self._dock_last_tf_ok_ns: int = 0
+        self._dock_creep_start: Optional[Tuple[float, float]] = None
 
         self._data_dir = get_data_dir()
 
@@ -935,16 +939,30 @@ class ScenarioControllerNode(Node):
             return
         self._state = State.DOCKING
         self._dock_settle_count = 0
-        self._dock_phase = "to_entry"  # to_entry → align → straight_in
+        self._dock_phase = "to_entry"  # to_entry → (creep) → align → straight_in
+        self._dock_creep_start = None
         self._dock_last_tf_ok_ns = self.get_clock().now().nanoseconds
         period = 1.0 / self._dock_rate_hz
         self._dock_timer = self.create_timer(period, self._cb_dock_control)
+        entry_d = self._dock_rear_offset + self._dock_approach_dist
         self.get_logger().info(
             f"도킹 제어 시작: {self._dock_robot_frame}→{self._dock_target_frame}, "
             f"cmd_vel={self._cmd_vel_topic}, rate={self._dock_rate_hz}Hz | "
-            f"진입점=후방 {self._dock_rear_offset + self._dock_approach_dist:.2f}m → "
-            f"직진 → 최종 {self._dock_rear_offset:.2f}m"
+            f"진입점=후방 {entry_d:.2f}m → creep {self._dock_entry_forward:.2f}m → 정렬 → "
+            f"최종 후방 {self._dock_rear_offset:.2f}m"
         )
+
+    def _robot_xy_in_target(self) -> Optional[Tuple[float, float]]:
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                self._dock_target_frame,
+                self._dock_robot_frame,
+                Time(),
+                timeout=Duration(seconds=self._dock_tf_timeout),
+            )
+        except Exception:
+            return None
+        return (tf.transform.translation.x, tf.transform.translation.y)
 
     def _cancel_dock_timer(self) -> None:
         if self._dock_timer is not None:
@@ -1003,14 +1021,14 @@ class ScenarioControllerNode(Node):
         q = tf.transform.rotation
         yaw_t = _yaw_from_quat(q.x, q.y, q.z, q.w)
 
-        # 대상 후방 축(-x_target) 단위벡터: 진입점·최종점이 이 직선 위에 놓임
+        # 대상 후방 축(-x_target) 위의 진입점·최종점 (robot 프레임)
         bx = -math.cos(yaw_t)
         by = -math.sin(yaw_t)
-        # 최종 standoff 지점, 진입점(더 뒤)
         fx = tx + self._dock_rear_offset * bx
         fy = ty + self._dock_rear_offset * by
-        ex = tx + (self._dock_rear_offset + self._dock_approach_dist) * bx
-        ey = ty + (self._dock_rear_offset + self._dock_approach_dist) * by
+        entry_dist = self._dock_rear_offset + self._dock_approach_dist
+        ex = tx + entry_dist * bx
+        ey = ty + entry_dist * by
 
         heading_err = _norm_angle(yaw_t)  # 대상과 같은 헤딩으로 정렬(직진 방향=+x_target)
         deg = math.degrees(yaw_t)
@@ -1022,10 +1040,18 @@ class ScenarioControllerNode(Node):
             bearing_e = _norm_angle(math.atan2(ey, ex))
             if rho_e <= self._dock_entry_pos_tol:
                 self._stop_robot()
-                self.get_logger().info(
-                    f"도킹 1/3 완료: 진입점 도달 rho_e={rho_e:.3f} → 헤딩 정렬"
-                )
-                self._dock_phase = "align"
+                if self._dock_entry_forward > 0.0:
+                    self._dock_creep_start = self._robot_xy_in_target()
+                    self.get_logger().info(
+                        f"도킹 1/3 완료: 진입점 도달 rho_e={rho_e:.3f} → "
+                        f"단순 직진 {self._dock_entry_forward:.2f}m(creep)"
+                    )
+                    self._dock_phase = "creep"
+                else:
+                    self.get_logger().info(
+                        f"도킹 1/3 완료: 진입점 도달 rho_e={rho_e:.3f} → 헤딩 정렬"
+                    )
+                    self._dock_phase = "align"
                 return
             if abs(bearing_e) > self._dock_coarse_ang:
                 lin, ang = 0.0, self._dock_k_ang * bearing_e
@@ -1035,6 +1061,29 @@ class ScenarioControllerNode(Node):
                 f"[DOCK 1/3 to_entry] T=({tx:.2f},{ty:.2f},{deg:.1f}°) "
                 f"entry=({ex:.2f},{ey:.2f}) rho_e={rho_e:.3f} bearing={math.degrees(bearing_e):.1f}° "
                 f"cmd=(v {lin:.3f}, w {ang:.3f})",
+                throttle_duration_sec=0.3,
+            )
+
+        elif self._dock_phase == "creep":
+            # 1.5) 헤딩 정렬 직전, 로봇 헤딩으로 단순 직진 조금(creep)
+            cur = self._robot_xy_in_target()
+            traveled = (
+                math.hypot(cur[0] - self._dock_creep_start[0], cur[1] - self._dock_creep_start[1])
+                if (cur is not None and self._dock_creep_start is not None)
+                else self._dock_entry_forward  # 측정 불가 → 즉시 종료
+            )
+            if traveled >= self._dock_entry_forward:
+                self._stop_robot()
+                self.get_logger().info(
+                    f"도킹 creep 완료: {traveled:.3f}m 직진 → 헤딩 정렬"
+                )
+                self._dock_phase = "align"
+                return
+            lin = max(self._dock_min_lin, self._dock_k_lin * (self._dock_entry_forward - traveled))
+            ang = 0.0
+            self.get_logger().info(
+                f"[DOCK creep] traveled={traveled:.3f}/{self._dock_entry_forward:.2f}m "
+                f"cmd=(v {lin:.3f}, w 0.000)",
                 throttle_duration_sec=0.3,
             )
 
@@ -1062,30 +1111,43 @@ class ScenarioControllerNode(Node):
             # 도킹 축(대상 헤딩선) 기준 robot 의 측방 이탈량(좌+)
             cross = tx * math.sin(yaw_t) - ty * math.cos(yaw_t)
             done_pos = rho_f <= self._dock_pos_tol or forward <= 0.0
-            if done_pos and abs(heading_err) <= self._dock_yaw_tol:
-                self._dock_settle_count += 1
-                self._stop_robot()
+            if done_pos:
+                # 위치 도달: 측방(cross)은 차동구동이 제자리에서 못 없앰 → cross 항 끄고
+                # heading-only 제자리 정렬로 교착(=cross가 헤딩항 상쇄) 해소 후 완료 판정.
+                if abs(heading_err) <= self._dock_yaw_tol:
+                    self._dock_settle_count += 1
+                    self._stop_robot()
+                    self.get_logger().info(
+                        f"[DOCK 3/3 settle {self._dock_settle_count}/{self._dock_settle_cycles}] "
+                        f"rho_f={rho_f:.3f} cross={cross:.3f} herr={math.degrees(heading_err):.2f}°",
+                        throttle_duration_sec=0.2,
+                    )
+                    if self._dock_settle_count >= self._dock_settle_cycles:
+                        self._finish_docking()
+                    return
+                self._dock_settle_count = 0
+                lin = 0.0
+                ang = self._dock_k_ang * heading_err  # cross 항 제거(상쇄 방지)
+                apply_min_ang = True
                 self.get_logger().info(
-                    f"[DOCK 3/3 settle {self._dock_settle_count}/{self._dock_settle_cycles}] "
-                    f"rho_f={rho_f:.3f} cross={cross:.3f} herr={math.degrees(heading_err):.2f}°",
-                    throttle_duration_sec=0.2,
+                    f"[DOCK 3/3 final_align] herr={math.degrees(heading_err):.2f}° "
+                    f"rho_f={rho_f:.3f} cross={cross:.3f} cmd=(v 0.000, w {ang:.3f})",
+                    throttle_duration_sec=0.3,
                 )
-                if self._dock_settle_count >= self._dock_settle_cycles:
-                    self._finish_docking()
-                return
-            self._dock_settle_count = 0
-            lin = self._dock_k_lin * max(forward, 0.0)
-            # Stanley 유사: 헤딩 정렬 + 축 복귀(cross 좌+면 우회전=음각속도)
-            ang = self._dock_k_ang * heading_err - self._dock_k_cross * cross
-            ang = _clamp(ang, -self._dock_straight_max_ang, self._dock_straight_max_ang)
-            apply_min_ang = False
-            self.get_logger().info(
-                f"[DOCK 3/3 straight_in] T=({tx:.2f},{ty:.2f},{deg:.1f}°) "
-                f"final=({fx:.2f},{fy:.2f}) forward={forward:.3f} rho_f={rho_f:.3f} "
-                f"cross={cross:.3f} herr={math.degrees(heading_err):.2f}° "
-                f"cmd=(v {lin:.3f}, w {ang:.3f})",
-                throttle_duration_sec=0.3,
-            )
+            else:
+                self._dock_settle_count = 0
+                lin = self._dock_k_lin * max(forward, 0.0)
+                # Stanley 유사: 헤딩 정렬 + 축 복귀(cross 좌+면 우회전=음각속도)
+                ang = self._dock_k_ang * heading_err - self._dock_k_cross * cross
+                ang = _clamp(ang, -self._dock_straight_max_ang, self._dock_straight_max_ang)
+                apply_min_ang = False
+                self.get_logger().info(
+                    f"[DOCK 3/3 straight_in] T=({tx:.2f},{ty:.2f},{deg:.1f}°) "
+                    f"final=({fx:.2f},{fy:.2f}) forward={forward:.3f} rho_f={rho_f:.3f} "
+                    f"cross={cross:.3f} herr={math.degrees(heading_err):.2f}° "
+                    f"cmd=(v {lin:.3f}, w {ang:.3f})",
+                    throttle_duration_sec=0.3,
+                )
 
         lin = _apply_deadband(lin, self._dock_min_lin, self._dock_max_lin) if lin != 0.0 else 0.0
         if ang != 0.0:
