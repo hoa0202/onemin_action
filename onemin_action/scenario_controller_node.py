@@ -9,6 +9,7 @@ carry_01 (운반): line_move 비활성(기본). /carry_robot/docking_move 만 �
 harv (수확): line_move + 도킹. move_to_return → 저장 라인 복귀 후 entering_start~ 수확 시나리오.
 """
 import enum
+import math
 from typing import Any, Optional, Tuple
 
 import rclpy
@@ -19,7 +20,7 @@ from rclpy.parameter import Parameter
 from rclpy.parameter_client import AsyncParameterClient
 from rclpy.task import Future
 from std_msgs.msg import String
-from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import Odometry
 from nav2_msgs.action import NavigateToPose
 from rclpy.duration import Duration
@@ -59,9 +60,32 @@ def _param_bool(value: Any) -> bool:
     return bool(value)
 
 
+def _yaw_from_quat(x: float, y: float, z: float, w: float) -> float:
+    return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+
+def _norm_angle(a: float) -> float:
+    return math.atan2(math.sin(a), math.cos(a))
+
+
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return lo if v < lo else hi if v > hi else v
+
+
+def _apply_deadband(v: float, vmin: float, vmax: float) -> float:
+    """0이 아니면 최소속도 보장(정지마찰 극복), 부호 유지, 최대속도 포화."""
+    if v == 0.0:
+        return 0.0
+    s = 1.0 if v > 0.0 else -1.0
+    m = abs(v)
+    m = _clamp(m, vmin, vmax)
+    return s * m
+
+
 class State(enum.Enum):
     IDLE = "idle"
     NAVIGATING = "navigating"
+    DOCKING = "docking"
     SEND_ENTERING_START = "send_entering_start"
     WAIT_ENTERING_CHECK = "wait_entering_check"
     WAIT_GOAL_FINISH = "wait_goal_finish"
@@ -97,6 +121,29 @@ class ScenarioControllerNode(Node):
         # Nav2 global_costmap 과 동일 프레임(보통 map). YAML 이 odom_1 등이면 여기에 map 두고 TF 로 goal 변환.
         self.declare_parameter("nav_goal_output_frame", "")
         self.declare_parameter("nav_goal_tf_timeout_sec", 1.0)
+
+        # ── 최종 도킹(차동구동, TF 기반 후방 standoff 정렬) ──────────────────
+        self.declare_parameter("enable_final_docking", True)
+        self.declare_parameter("dock_target_frame", "base_link_1")   # 도킹 대상 로봇
+        self.declare_parameter("dock_robot_frame", "base_link_2")    # carry 로봇
+        self.declare_parameter("cmd_vel_topic", "/cmd_vel")
+        # 대상 로봇 후방(-x_target)으로 이만큼 떨어진 지점에 carry 가 정렬·정지
+        self.declare_parameter("dock_rear_offset", 1.0)
+        self.declare_parameter("dock_control_rate_hz", 20.0)
+        self.declare_parameter("dock_k_lin", 0.5)
+        self.declare_parameter("dock_k_ang", 1.2)
+        self.declare_parameter("dock_max_lin", 0.25)
+        self.declare_parameter("dock_min_lin", 0.03)
+        self.declare_parameter("dock_max_ang", 0.6)
+        self.declare_parameter("dock_min_ang", 0.05)
+        # 목표점 방위 오차가 이보다 크면 직진 멈추고 제자리 선회부터
+        self.declare_parameter("dock_coarse_ang", 0.6)
+        self.declare_parameter("dock_pos_tol", 0.08)
+        self.declare_parameter("dock_yaw_tol", 0.05)
+        self.declare_parameter("dock_settle_cycles", 5)
+        self.declare_parameter("dock_tf_timeout_sec", 0.2)
+        self.declare_parameter("dock_lost_timeout_sec", 3.0)
+        self.declare_parameter("dock_status_value", "docking_end")
 
         self._nav2_action_name = self.get_parameter("nav2_action_name").value
         self._entering_check_timeout = self.get_parameter("entering_check_timeout_sec").value
@@ -160,11 +207,56 @@ class ScenarioControllerNode(Node):
             )
         except (TypeError, ValueError):
             self._nav_goal_tf_timeout_sec = 1.0
+        # 도킹 파라미터 로드
+        self._enable_final_docking = _param_bool(
+            self.get_parameter("enable_final_docking").value
+        )
+        self._dock_target_frame = str(self.get_parameter("dock_target_frame").value or "base_link_1")
+        self._dock_robot_frame = str(self.get_parameter("dock_robot_frame").value or "base_link_2")
+        self._cmd_vel_topic = str(self.get_parameter("cmd_vel_topic").value or "/cmd_vel")
+
+        def _pf(name: str, default: float) -> float:
+            try:
+                return float(self.get_parameter(name).value)
+            except (TypeError, ValueError):
+                return default
+
+        self._dock_rear_offset = _pf("dock_rear_offset", 1.0)
+        self._dock_rate_hz = max(1.0, _pf("dock_control_rate_hz", 20.0))
+        self._dock_k_lin = _pf("dock_k_lin", 0.5)
+        self._dock_k_ang = _pf("dock_k_ang", 1.2)
+        self._dock_max_lin = _pf("dock_max_lin", 0.25)
+        self._dock_min_lin = _pf("dock_min_lin", 0.03)
+        self._dock_max_ang = _pf("dock_max_ang", 0.6)
+        self._dock_min_ang = _pf("dock_min_ang", 0.05)
+        self._dock_coarse_ang = _pf("dock_coarse_ang", 0.6)
+        self._dock_pos_tol = _pf("dock_pos_tol", 0.08)
+        self._dock_yaw_tol = _pf("dock_yaw_tol", 0.05)
+        try:
+            self._dock_settle_cycles = max(1, int(self.get_parameter("dock_settle_cycles").value))
+        except (TypeError, ValueError):
+            self._dock_settle_cycles = 5
+        self._dock_tf_timeout = _pf("dock_tf_timeout_sec", 0.2)
+        self._dock_lost_timeout = _pf("dock_lost_timeout_sec", 3.0)
+        self._dock_status_value = str(self.get_parameter("dock_status_value").value or "docking_end")
+
         self._tf_buffer: Optional[Buffer] = None
         self._tf_listener: Optional[TransformListener] = None
-        if self._nav_goal_output_frame:
+        if self._nav_goal_output_frame or self._enable_final_docking:
             self._tf_buffer = Buffer(cache_time=Duration(seconds=30.0))
             self._tf_listener = TransformListener(self._tf_buffer, self, spin_thread=True)
+
+        # 도킹 런타임 상태
+        self._after_nav_is_dock_station: bool = False
+        self._cmd_vel_pub = self.create_publisher(Twist, self._cmd_vel_topic, 10)
+        self._dock_status_pub = (
+            self.create_publisher(String, self._docking_topic, 10)
+            if self._docking_topic
+            else None
+        )
+        self._dock_timer: Optional[Node.Timer] = None
+        self._dock_settle_count = 0
+        self._dock_last_tf_ok_ns: int = 0
 
         self._data_dir = get_data_dir()
 
@@ -253,6 +345,14 @@ class ScenarioControllerNode(Node):
             f"graph_relax_yaw={self._graph_segment_relax_yaw} | "
             f"nav_goal_frame={self._nav_goal_output_frame or '원본'}"
         )
+        if self._enable_final_docking:
+            self.get_logger().info(
+                f"최종 도킹 ON: {self._dock_robot_frame}→{self._dock_target_frame} "
+                f"후방 {self._dock_rear_offset}m, cmd_vel={self._cmd_vel_topic}, "
+                f"pos_tol={self._dock_pos_tol} yaw_tol={self._dock_yaw_tol}"
+            )
+        else:
+            self.get_logger().info("최종 도킹 OFF (도킹 스테이션 도착 시 바로 IDLE).")
 
     def _nav_goal_pose_in_output_frame(self, pose: PoseStamped) -> PoseStamped:
         target = self._nav_goal_output_frame
@@ -365,6 +465,9 @@ class ScenarioControllerNode(Node):
         cmd = (msg.data or "").strip()
         if not cmd:
             return
+        # 자체 발행하는 상태 문자열은 명령으로 처리하지 않음(토픽 공유로 인한 자기수신 방지)
+        if cmd in ("docking_end", "move_finish", self._dock_status_value):
+            return
         stamp = self.get_clock().now().to_msg()
 
         if cmd == DOCK_RETURN_CMD:
@@ -443,6 +546,7 @@ class ScenarioControllerNode(Node):
             self._nav_targets = poses
             self._nav_target_idx = 0
             self._after_nav_is_docking = True
+            self._after_nav_is_dock_station = cmd == DOCK_STATION_CMD
             self.get_logger().info(
                 f"도킹 그래프 {cmd!r} {len(poses)}포인트, 시작={eff_start}"
             )
@@ -450,6 +554,7 @@ class ScenarioControllerNode(Node):
             self._nav_targets = [dock_pose]
             self._nav_target_idx = 0
             self._after_nav_is_docking = True
+            self._after_nav_is_dock_station = cmd == DOCK_STATION_CMD
             self.get_logger().info(f"도킹 직선 {cmd!r}")
 
         self._state = State.NAVIGATING
@@ -703,6 +808,15 @@ class ScenarioControllerNode(Node):
             if self._after_nav_is_docking:
                 self._after_nav_is_docking = False
                 self._line_number = None
+                is_station = self._after_nav_is_dock_station
+                self._after_nav_is_dock_station = False
+                if is_station and self._enable_final_docking:
+                    self.get_logger().info(
+                        "도킹 스테이션 도착 → 최종 도킹 시작 "
+                        f"(대상 {self._dock_target_frame} 후방 {self._dock_rear_offset}m)"
+                    )
+                    self._start_docking()
+                    return
                 self._state = State.IDLE
                 self.get_logger().info(
                     "도킹 스테이션 도착 → IDLE (entering_start 생략). 복귀: move_to_return"
@@ -787,12 +901,138 @@ class ScenarioControllerNode(Node):
                 self.get_logger().info("도킹 복귀 라인 사이클 완료 → 저장 라인 초기화")
             self._state = State.IDLE
 
+    # =========================
+    # 최종 도킹 (차동구동, TF 폐루프)
+    # =========================
+    def _publish_cmd(self, lin: float, ang: float) -> None:
+        t = Twist()
+        t.linear.x = float(lin)
+        t.angular.z = float(ang)
+        self._cmd_vel_pub.publish(t)
+
+    def _stop_robot(self) -> None:
+        self._publish_cmd(0.0, 0.0)
+
+    def _start_docking(self) -> None:
+        if self._tf_buffer is None:
+            self.get_logger().error(
+                "도킹 불가: TF 버퍼 없음 (enable_final_docking 확인). IDLE 로."
+            )
+            self._state = State.IDLE
+            return
+        self._state = State.DOCKING
+        self._dock_settle_count = 0
+        self._dock_last_tf_ok_ns = self.get_clock().now().nanoseconds
+        period = 1.0 / self._dock_rate_hz
+        self._dock_timer = self.create_timer(period, self._cb_dock_control)
+        self.get_logger().info(
+            f"도킹 제어 시작: {self._dock_robot_frame}→{self._dock_target_frame}, "
+            f"cmd_vel={self._cmd_vel_topic}, rate={self._dock_rate_hz}Hz"
+        )
+
+    def _cancel_dock_timer(self) -> None:
+        if self._dock_timer is not None:
+            try:
+                self._dock_timer.cancel()
+            except Exception:
+                pass
+            self._dock_timer = None
+
+    def _finish_docking(self) -> None:
+        self._cancel_dock_timer()
+        self._stop_robot()
+        if self._dock_status_pub is not None:
+            # 도킹 명령 토픽으로 상태 통지(debug_topic 등 수신). 자기수신은 콜백에서 무시.
+            msg = String()
+            msg.data = self._dock_status_value
+            self._dock_status_pub.publish(msg)
+        self.get_logger().info(f"도킹 완료 → '{self._dock_status_value}' 발행, IDLE.")
+        print(f"[도킹 완료] {self._dock_status_value}", flush=True)
+        self._line_number = None
+        self._state = State.IDLE
+
+    def _abort_docking(self, reason: str) -> None:
+        self._cancel_dock_timer()
+        self._stop_robot()
+        self.get_logger().warn(f"도킹 중단: {reason} → IDLE.")
+        print(f"[도킹 중단] {reason}", flush=True)
+        self._state = State.IDLE
+
+    def _cb_dock_control(self) -> None:
+        if self._state != State.DOCKING:
+            self._cancel_dock_timer()
+            return
+
+        now_ns = self.get_clock().now().nanoseconds
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                self._dock_robot_frame,
+                self._dock_target_frame,
+                Time(),
+                timeout=Duration(seconds=self._dock_tf_timeout),
+            )
+        except Exception as e:
+            self._stop_robot()
+            lost_s = (now_ns - self._dock_last_tf_ok_ns) / 1e9
+            if lost_s >= self._dock_lost_timeout:
+                self._abort_docking(
+                    f"TF {self._dock_robot_frame}←{self._dock_target_frame} {lost_s:.1f}s 미수신 ({e})"
+                )
+            return
+        self._dock_last_tf_ok_ns = now_ns
+
+        # 대상 로봇 원점(robot 프레임 기준)
+        tx = tf.transform.translation.x
+        ty = tf.transform.translation.y
+        q = tf.transform.rotation
+        yaw_t = _yaw_from_quat(q.x, q.y, q.z, q.w)  # 대상 헤딩(robot 프레임)
+
+        # 대상 후방(-x_target)으로 offset 만큼 떨어진 도킹 지점 (robot 프레임)
+        dx = tx - self._dock_rear_offset * math.cos(yaw_t)
+        dy = ty - self._dock_rear_offset * math.sin(yaw_t)
+
+        rho = math.hypot(dx, dy)
+        bearing = _norm_angle(math.atan2(dy, dx))   # 도킹 지점 방위
+        heading_err = _norm_angle(yaw_t)            # 최종 정렬 오차(대상과 같은 헤딩)
+
+        # 완료 판정: 위치·헤딩 동시에 임계값 안 + 연속 settle
+        if rho <= self._dock_pos_tol and abs(heading_err) <= self._dock_yaw_tol:
+            self._dock_settle_count += 1
+            self._stop_robot()
+            if self._dock_settle_count >= self._dock_settle_cycles:
+                self._finish_docking()
+            return
+        self._dock_settle_count = 0
+
+        if rho > self._dock_pos_tol:
+            # 접근 단계
+            if abs(bearing) > self._dock_coarse_ang:
+                # 목표점이 옆/뒤 → 제자리 선회 우선
+                lin = 0.0
+                ang = self._dock_k_ang * bearing
+            else:
+                lin = self._dock_k_lin * rho
+                ang = self._dock_k_ang * bearing
+        else:
+            # 위치 도달, 최종 헤딩 정렬(제자리 선회)
+            lin = 0.0
+            ang = self._dock_k_ang * heading_err
+
+        lin = _apply_deadband(lin, self._dock_min_lin, self._dock_max_lin) if lin != 0.0 else 0.0
+        ang = _apply_deadband(ang, self._dock_min_ang, self._dock_max_ang) if ang != 0.0 else 0.0
+        self._publish_cmd(lin, ang)
+
     def destroy_node(self, *args, **kwargs):
         if getattr(self, "_entering_check_timer", None) is not None:
             try:
                 self._entering_check_timer.cancel()
             except Exception:
                 pass
+        self._cancel_dock_timer()
+        try:
+            self._stop_robot()
+        except Exception:
+            pass
         super().destroy_node(*args, **kwargs)
 
 

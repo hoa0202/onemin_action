@@ -116,6 +116,41 @@ def generate_launch_description():
             default_value="1.0",
             description="goal 변환 lookup_transform 타임아웃(초)",
         ),
+        DeclareLaunchArgument(
+            "enable_final_docking",
+            default_value="true",
+            description="도킹 스테이션 도착 후 TF 기반 후방 정밀 도킹 수행",
+        ),
+        DeclareLaunchArgument(
+            "dock_target_frame",
+            default_value="base_link_1",
+            description="도킹 대상 로봇 TF 프레임",
+        ),
+        DeclareLaunchArgument(
+            "dock_robot_frame",
+            default_value="base_link_2",
+            description="carry(자기) 로봇 TF 프레임",
+        ),
+        DeclareLaunchArgument(
+            "cmd_vel_topic",
+            default_value="/cmd_vel",
+            description="도킹 시 속도 명령 토픽(geometry_msgs/Twist)",
+        ),
+        DeclareLaunchArgument(
+            "dock_rear_offset",
+            default_value="1.0",
+            description="대상 후방(-x)으로 떨어져 정렬·정지할 거리(m)",
+        ),
+        DeclareLaunchArgument(
+            "dock_pos_tol",
+            default_value="0.08",
+            description="도킹 완료 위치 오차 임계(m)",
+        ),
+        DeclareLaunchArgument(
+            "dock_yaw_tol",
+            default_value="0.05",
+            description="도킹 완료 헤딩 오차 임계(rad)",
+        ),
         Node(
             package="onemin_action",
             executable="scenario_controller_node",
@@ -148,6 +183,13 @@ def generate_launch_description():
                 ),
                 "nav_goal_output_frame": LaunchConfiguration("nav_goal_output_frame"),
                 "nav_goal_tf_timeout_sec": LaunchConfiguration("nav_goal_tf_timeout_sec"),
+                "enable_final_docking": LaunchConfiguration("enable_final_docking"),
+                "dock_target_frame": LaunchConfiguration("dock_target_frame"),
+                "dock_robot_frame": LaunchConfiguration("dock_robot_frame"),
+                "cmd_vel_topic": LaunchConfiguration("cmd_vel_topic"),
+                "dock_rear_offset": LaunchConfiguration("dock_rear_offset"),
+                "dock_pos_tol": LaunchConfiguration("dock_pos_tol"),
+                "dock_yaw_tol": LaunchConfiguration("dock_yaw_tol"),
             }],
         ),
     ])
