@@ -772,11 +772,13 @@ class ScenarioControllerNode(Node):
                 return
             self.get_logger().info("[goal_return_finish] 수신 → 다시 라인 입력 대기.")
             print("[goal_return_finish] 수신 → 다시 라인 입력 대기.", flush=True)
-            # 디버깅용 종료 신호 (외부 소비처 없음). 필요 시 주석 해제.
-            # msg = String()
-            # msg.data = "entering_end2"
-            # self._action_pub.publish(msg)
-            # self.get_logger().info("/action 발행: entering_end2")
+            # goal_return_finish 수신 여부를 확인하기 위한 핸드쉐이크 피드백 토픽을 발행한다.
+            # 만약 이 위치에서 goal_return_finish를 받지 못하면, 상대방에서 goal_return_finish 토픽을 계속 발행하게 된다.
+
+            msg = String()
+            msg.data = "goal_return_finish_feedback"
+            self._action_pub.publish(msg)
+            self.get_logger().info("/action 발행: goal_return_finish_feedback")
             if self._from_dock_return:
                 self._from_dock_return = False
                 self._line_before_dock = None
