@@ -198,6 +198,9 @@ class ScenarioControllerNode(Node):
         self._warned_yaw_tol_all_names_failed = False
 
         self._action_pub = self.create_publisher(String, "/action", 10)
+        self._move_pub = self.create_publisher(String, "/harv_robot/move", 10)
+        # 경로 전체(중간 웨이포인트 제외) move_start/move_end 1회 쌍
+        self._move_leg_open = False
         self._action_check_sub = self.create_subscription(
             String, "/action_check", self._cb_action_check, 10
         )
@@ -230,7 +233,7 @@ class ScenarioControllerNode(Node):
 
         self.get_logger().info(
             f"시나리오: {self._line_command_topic!r} (String 1~{self._line_number_max}|warehouse) "
-            f"| 도킹: {self._docking_topic!r}"
+            f"| 도킹: {self._docking_topic!r} | 이동신호: /harv_robot/move"
         )
         _gstart = (
             repr(self._graph_start_node_id)
@@ -512,6 +515,30 @@ class ScenarioControllerNode(Node):
             return
         self._navigate_to_line(n, stamp)
 
+    def _publish_harv_move(self, data: str) -> None:
+        msg = String()
+        msg.data = data
+        self._move_pub.publish(msg)
+        self.get_logger().info(f"/harv_robot/move 발행: {data}")
+
+    def _begin_move_leg(self) -> None:
+        """경로의 첫 NavigateToPose 직전에 1회."""
+        if self._move_leg_open:
+            return
+        self._move_leg_open = True
+        self._publish_harv_move("move_start")
+
+    def _finish_move_leg(self) -> None:
+        """경로의 마지막 세그먼트 성공 시에만 1회. 중간 웨이포인트에서는 호출하지 않음."""
+        if not self._move_leg_open:
+            return
+        self._move_leg_open = False
+        self._publish_harv_move("move_end")
+
+    def _cancel_move_leg(self) -> None:
+        """목표 거부/실패 시 move_end 없이 플래그만 닫음."""
+        self._move_leg_open = False
+
     def _desired_nav_yaw_tolerance(self) -> Optional[float]:
         """그래프 경유 중간만 완화. None 이면 controller 파라미터 건드리지 않음."""
         if not self._graph_segment_relax_yaw:
@@ -603,11 +630,14 @@ class ScenarioControllerNode(Node):
     def _send_current_nav_goal(self) -> None:
         if self._nav_target_idx >= len(self._nav_targets):
             self.get_logger().error("내비 목표 인덱스 오류.")
+            self._cancel_move_leg()
             self._after_nav_is_docking = False
             self._after_nav_is_warehouse_home = False
             self._from_dock_return = False
             self._state = State.IDLE
             return
+        if self._nav_target_idx == 0:
+            self._begin_move_leg()
         pose = self._nav_targets[self._nav_target_idx]
         desired_tol = self._desired_nav_yaw_tolerance()
         if desired_tol is None:
@@ -641,6 +671,7 @@ class ScenarioControllerNode(Node):
             self._nav_goal_handle = future.result()
             if not self._nav_goal_handle.accepted:
                 self.get_logger().error("Nav2 목표 거부.")
+                self._cancel_move_leg()
                 self._nav_targets = []
                 self._nav_target_idx = 0
                 self._after_nav_is_docking = False
@@ -652,6 +683,7 @@ class ScenarioControllerNode(Node):
             self._nav_result_future.add_done_callback(self._cb_nav_result_done)
         except Exception as e:
             self.get_logger().error(f"Nav2 goal 전송 실패: {e}")
+            self._cancel_move_leg()
             self._nav_targets = []
             self._nav_target_idx = 0
             self._after_nav_is_docking = False
@@ -670,6 +702,7 @@ class ScenarioControllerNode(Node):
             status = future.result().status
             if status != 4:  # SUCCEEDED = 4
                 self.get_logger().warn(f"Nav2 이동 완료 (성공 아님): status={status}")
+                self._cancel_move_leg()
                 self._nav_targets = []
                 self._nav_target_idx = 0
                 self._after_nav_is_docking = False
@@ -684,6 +717,7 @@ class ScenarioControllerNode(Node):
             if self._nav_target_idx < len(self._nav_targets):
                 self._send_current_nav_goal()
                 return
+            self._finish_move_leg()
             self._nav_targets = []
             self._nav_target_idx = 0
             if self._after_nav_is_docking:
@@ -704,6 +738,7 @@ class ScenarioControllerNode(Node):
             self._do_entering_start()
         except Exception as e:
             self.get_logger().error(f"Nav2 result 수신 오류: {e}")
+            self._cancel_move_leg()
             self._nav_targets = []
             self._nav_target_idx = 0
             self._after_nav_is_docking = False

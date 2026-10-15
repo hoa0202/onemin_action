@@ -73,7 +73,7 @@ class HarvestDebugNode(Node):
         print("carry_docking station / return")
         print("")
         print("[수동 액션 (/action)]")
-        print("end2  → entering_end")
+        print("end2 / entering_end  → /action entering_end")
         print("")
         print("help / quit")
         print("====================================================\n")
@@ -179,7 +179,7 @@ class HarvestDebugNode(Node):
                 continue
 
             # /action (manual trigger)
-            if user_input == 'end2':
+            if user_input in ('end2', 'entering_end'):
                 self.publish_string(self.action_pub, '/action', 'entering_end')
                 continue
 
