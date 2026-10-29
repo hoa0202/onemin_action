@@ -5,6 +5,7 @@
   "warehouse" → line_positions 의 키 ``warehouse``(우선) 또는 최대 line_N; 그래프는 ``line_goal_links.warehouse`` 등.
 도킹: /harv_robot/docking_move move_to_docking_station → docking_positions + docking_goal_links,
   IDLE 이고 마지막 라인 번호가 있으면 복귀용으로 저장.
+  스테이션 도착 성공 시 /docking/done (Bool) False 1회.
   move_to_return → 저장된 라인으로 다시 그래프 이동 후 entering_start~ 동일 수확 시나리오.
 """
 import enum
@@ -17,10 +18,11 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.parameter import Parameter
 from rclpy.parameter_client import AsyncParameterClient
 from rclpy.task import Future
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from nav2_msgs.action import NavigateToPose
+from nav2_msgs.srv import ClearEntireCostmap
 from rclpy.duration import Duration
 from rclpy.time import Time
 from tf2_geometry_msgs.tf2_geometry_msgs import do_transform_pose
@@ -170,6 +172,8 @@ class ScenarioControllerNode(Node):
         self._nav_targets: list = []
         self._nav_target_idx: int = 0
         self._after_nav_is_docking: bool = False
+        # move_to_docking_station 도착 성공일 때만 /docking/done False 1회
+        self._dock_station_leg: bool = False
         self._after_nav_is_warehouse_home: bool = False
         self._line_before_dock: Optional[int] = None
         self._from_dock_return: bool = False
@@ -199,8 +203,26 @@ class ScenarioControllerNode(Node):
 
         self._action_pub = self.create_publisher(String, "/action", 10)
         self._move_pub = self.create_publisher(String, "/harv_robot/move", 10)
+        self._dock_done_pub = self.create_publisher(Bool, "/docking/done", 10)
         # 경로 전체(중간 웨이포인트 제외) move_start/move_end 1회 쌍
         self._move_leg_open = False
+        self._costmap_clear_left = 0
+        self._costmap_clear_clients = (
+            (
+                "/global_costmap/clear_entirely_global_costmap",
+                self.create_client(
+                    ClearEntireCostmap,
+                    "/global_costmap/clear_entirely_global_costmap",
+                ),
+            ),
+            (
+                "/local_costmap/clear_entirely_local_costmap",
+                self.create_client(
+                    ClearEntireCostmap,
+                    "/local_costmap/clear_entirely_local_costmap",
+                ),
+            ),
+        )
         self._action_check_sub = self.create_subscription(
             String, "/action_check", self._cb_action_check, 10
         )
@@ -233,7 +255,7 @@ class ScenarioControllerNode(Node):
 
         self.get_logger().info(
             f"시나리오: {self._line_command_topic!r} (String 1~{self._line_number_max}|warehouse) "
-            f"| 도킹: {self._docking_topic!r} | 이동신호: /harv_robot/move"
+            f"| 도킹: {self._docking_topic!r} | 이동신호: /harv_robot/move | 도킹완료: /docking/done"
         )
         _gstart = (
             repr(self._graph_start_node_id)
@@ -436,6 +458,7 @@ class ScenarioControllerNode(Node):
             self._after_nav_is_docking = True
             self.get_logger().info(f"도킹 직선 {cmd!r}")
 
+        self._dock_station_leg = cmd == DOCK_STATION_CMD
         self._state = State.NAVIGATING
         self._send_current_nav_goal()
 
@@ -515,18 +538,62 @@ class ScenarioControllerNode(Node):
             return
         self._navigate_to_line(n, stamp)
 
+    def _publish_docking_done(self, value: bool) -> None:
+        msg = Bool()
+        msg.data = value
+        self._dock_done_pub.publish(msg)
+        self.get_logger().info(f"/docking/done 발행: {value}")
+
     def _publish_harv_move(self, data: str) -> None:
         msg = String()
         msg.data = data
         self._move_pub.publish(msg)
         self.get_logger().info(f"/harv_robot/move 발행: {data}")
 
-    def _begin_move_leg(self) -> None:
-        """경로의 첫 NavigateToPose 직전에 1회."""
+    def _begin_move_leg(self) -> bool:
+        """경로의 첫 NavigateToPose 직전에 1회.
+
+        False면 costmap clear 응답 뒤에 `_send_current_nav_goal`을 다시 호출한다.
+        """
         if self._move_leg_open:
-            return
+            return True
         self._move_leg_open = True
         self._publish_harv_move("move_start")
+        self._clear_costmaps_once()
+        return False
+
+    def _clear_costmaps_once(self) -> None:
+        """move_start 때 global/local 각 1회. 중간 웨이포인트에서는 호출하지 않음."""
+        pending = 0
+        for name, client in self._costmap_clear_clients:
+            if not client.service_is_ready() and not client.wait_for_service(timeout_sec=0.5):
+                self.get_logger().warn(f"costmap clear 서비스 없음: {name}")
+                continue
+            fut = client.call_async(ClearEntireCostmap.Request())
+            fut.add_done_callback(lambda f, n=name: self._cb_costmap_cleared(n, f))
+            pending += 1
+        if pending == 0:
+            self._send_current_nav_goal()
+            return
+        self._costmap_clear_left = pending
+
+    def _cb_costmap_cleared(self, name: str, future: Future) -> None:
+        try:
+            future.result()
+            self.get_logger().info(f"costmap clear: {name}")
+        except Exception as e:
+            self.get_logger().warn(f"costmap clear 실패 {name}: {e}")
+        self._costmap_clear_left -= 1
+        if self._costmap_clear_left > 0:
+            return
+        self._costmap_clear_left = 0
+        if (
+            not self._move_leg_open
+            or self._state != State.NAVIGATING
+            or self._nav_target_idx != 0
+        ):
+            return
+        self._send_current_nav_goal()
 
     def _finish_move_leg(self) -> None:
         """경로의 마지막 세그먼트 성공 시에만 1회. 중간 웨이포인트에서는 호출하지 않음."""
@@ -636,8 +703,8 @@ class ScenarioControllerNode(Node):
             self._from_dock_return = False
             self._state = State.IDLE
             return
-        if self._nav_target_idx == 0:
-            self._begin_move_leg()
+        if self._nav_target_idx == 0 and not self._begin_move_leg():
+            return
         pose = self._nav_targets[self._nav_target_idx]
         desired_tol = self._desired_nav_yaw_tolerance()
         if desired_tol is None:
@@ -721,9 +788,13 @@ class ScenarioControllerNode(Node):
             self._nav_targets = []
             self._nav_target_idx = 0
             if self._after_nav_is_docking:
+                station = self._dock_station_leg
                 self._after_nav_is_docking = False
+                self._dock_station_leg = False
                 self._line_number = None
                 self._state = State.IDLE
+                if station:
+                    self._publish_docking_done(False)
                 self.get_logger().info(
                     "도킹 스테이션 도착 → IDLE (entering_start 생략). 복귀: move_to_return"
                 )
